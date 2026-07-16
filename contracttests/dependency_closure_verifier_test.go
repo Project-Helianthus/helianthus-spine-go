@@ -3,7 +3,6 @@ package contracttests
 import (
 	"bytes"
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -26,6 +25,7 @@ const (
 type closureFixtureFile struct {
 	data       string
 	executable bool
+	symlink    string
 }
 
 type closureResult struct {
@@ -78,8 +78,8 @@ func TestDependencyClosureVerifierFixtures(t *testing.T) {
 			edit: setFixtureText("go.work", "go 1.22.0\n\nuse ./local/ship-go\n"),
 		},
 		{
-			name: "unclassified tracked release control", wantPath: "release/dependency-control.lockx", wantClass: "unclassified", wantReason: "unclassified_dependency_control",
-			edit: setFixtureText("release/dependency-control.lockx", "module="+canonicalShip+"\nversion="+canonicalVer+"\n"),
+			name: "unclassified tracked dependency control", wantPath: "dependency-control.lockx", wantClass: "unclassified", wantReason: "unclassified_dependency_control",
+			edit: setFixtureText("dependency-control.lockx", "module="+canonicalShip+"\nversion="+canonicalVer+"\n"),
 		},
 		{
 			name: "private contents stay private", wantPath: "release/release.json", wantClass: "release_config", wantReason: "upstream_module_identity", secret: privateSentinel,
@@ -96,7 +96,8 @@ func TestDependencyClosureVerifierFixtures(t *testing.T) {
 		{"local action", ".github/actions/release/action.yml", "local_action", "\n# " + upstreamShip + "\n"},
 		{"release script", "scripts/release.sh", "build_release_control", "\n# " + upstreamShip + "\n"},
 		{"release config", "release/release.json", "release_config", `{"module":"` + upstreamShip + `","release_inputs":["release/nested.json"]}` + "\n"},
-		{"recursive release input", "release/nested.json", "release_input", `{"module":"` + upstreamShip + `"}` + "\n"},
+		{"recursive release input", "release/nested.json", "release_config", `{"module":"` + upstreamShip + `"}` + "\n"},
+		{"upstream eebus", "build/dependencies.json", "build_release_control", `{"module":"` + upstreamEEBus + `"}` + "\n"},
 	}
 	for _, item := range hidden {
 		edit := setFixtureText(item.path, item.data)
@@ -118,6 +119,9 @@ func TestDependencyClosureVerifierFixtures(t *testing.T) {
 		badVersions := []struct{ name, version string }{
 			{"pseudo version", strings.TrimSuffix(fork.reviewed, "-helianthus.1") + "-0.20260716000000-0123456789ab"},
 			{"branch selection", "helianthus-v0.7"},
+			{"main query", "main"},
+			{"dev query", "dev"},
+			{"latest query", "latest"},
 			{"non reviewed tag", strings.TrimSuffix(fork.reviewed, ".1") + ".2"},
 		}
 		for _, bad := range badVersions {
@@ -128,6 +132,107 @@ func TestDependencyClosureVerifierFixtures(t *testing.T) {
 			})
 		}
 	}
+
+	surfaces := []struct{ name, path, class string }{
+		{"nested go mod", "nested/module/go.mod", "go_module"},
+		{"nested go sum", "nested/module/go.sum", "go_checksum"},
+		{"nested go work", "nested/work/go.work", "workspace"},
+		{"nested go work sum", "nested/work/go.work.sum", "workspace_checksum"},
+		{"nested vendor manifest", "nested/vendor/modules.txt", "vendor_manifest"},
+		{"arbitrary script", "scripts/check.py", "build_release_control"},
+		{"build input", "build/closure.txt", "build_release_control"},
+		{"release input", "release/closure.txt", "build_release_control"},
+		{"config input", "config/closure.conf", "config"},
+		{"root makefile", "Makefile", "makefile"},
+		{"nested makefile", "tools/Makefile", "makefile"},
+		{"make include", "tools/closure.mk", "makefile"},
+		{"dockerfile", "Dockerfile.release", "container_build"},
+		{"nested containerfile", "images/Containerfile.build", "container_build"},
+		{"taskfile", "Taskfile.release.yml", "taskfile"},
+		{"build yaml", "ci/package-build.yaml", "build_release_config"},
+		{"release toml", "ci/package-release.toml", "build_release_config"},
+		{"goreleaser", ".goreleaser.yaml", "build_release_config"},
+		{"backup go source", "model/escaped.go_temp", "source_identity"},
+	}
+	for _, surface := range surfaces {
+		cases = append(cases, closureCase{
+			name:     "closed surface " + surface.name,
+			edit:     setFixtureText(surface.path, upstreamShip+"\n"),
+			wantPath: surface.path, wantClass: surface.class, wantReason: "upstream_module_identity",
+		})
+	}
+
+	cases = append(cases,
+		closureCase{
+			name: "structured JSON split module and version", edit: setFixtureText("release/release.json", `{"module":"`+canonicalShip+`","version":"main"}`+"\n"),
+			wantPath: "release/release.json", wantClass: "release_config", wantReason: "unreviewed_project_fork_version",
+		},
+		closureCase{
+			name: "structured YAML split module and version", edit: setFixtureText("config/dependency.yml", "module: "+canonicalShip+"\nversion: latest\n"),
+			wantPath: "config/dependency.yml", wantClass: "config", wantReason: "unreviewed_project_fork_version",
+		},
+		closureCase{
+			name: "module query syntax", edit: appendFixtureText("scripts/release.sh", "\n# "+canonicalShip+"?ref=dev\n"),
+			wantPath: "scripts/release.sh", wantClass: "build_release_control", wantReason: "unreviewed_project_fork_version",
+		},
+		closureCase{
+			name: "recursive JSON local reference", edit: func(files map[string]closureFixtureFile) {
+				files["release/release.json"] = closureFixtureFile{data: `{"release_inputs":["assets/nested.json"]}` + "\n"}
+				files["assets/nested.json"] = closureFixtureFile{data: `{"module":"` + upstreamShip + `"}` + "\n"}
+			},
+			wantPath: "assets/nested.json", wantClass: "referenced_input", wantReason: "upstream_module_identity",
+		},
+		closureCase{
+			name: "relative recursive JSON local reference", edit: func(files map[string]closureFixtureFile) {
+				files["release/release.json"] = closureFixtureFile{data: `{"release_inputs":["../assets/nested.json"]}` + "\n"}
+				files["assets/nested.json"] = closureFixtureFile{data: `{"module":"` + upstreamShip + `"}` + "\n"}
+			},
+			wantPath: "assets/nested.json", wantClass: "referenced_input", wantReason: "upstream_module_identity",
+		},
+		closureCase{
+			name: "tracked directory prefix expansion", edit: func(files map[string]closureFixtureFile) {
+				files["release/release.json"] = closureFixtureFile{data: `{"release_inputs":["assets/bundle"]}` + "\n"}
+				files["assets/bundle/nested.json"] = closureFixtureFile{data: `{"module":"` + upstreamShip + `"}` + "\n"}
+			},
+			wantPath: "assets/bundle/nested.json", wantClass: "referenced_input", wantReason: "upstream_module_identity",
+		},
+		closureCase{
+			name: "recursive script local reference", edit: func(files map[string]closureFixtureFile) {
+				files["scripts/release.sh"] = closureFixtureFile{data: "#!/bin/sh\ncat assets/module.txt\n", executable: true}
+				files["assets/module.txt"] = closureFixtureFile{data: upstreamShip + "\n"}
+			},
+			wantPath: "assets/module.txt", wantClass: "referenced_input", wantReason: "upstream_module_identity",
+		},
+		closureCase{
+			name: "recursive YAML local reference", edit: func(files map[string]closureFixtureFile) {
+				files["config/dependency.yml"] = closureFixtureFile{data: "input: assets/module.json\n"}
+				files["assets/module.json"] = closureFixtureFile{data: `{"module":"` + upstreamShip + `"}` + "\n"}
+			},
+			wantPath: "assets/module.json", wantClass: "referenced_input", wantReason: "upstream_module_identity",
+		},
+		closureCase{
+			name: "untracked local reference", edit: setFixtureText("release/release.json", `{"release_inputs":["assets/missing.json"]}`+"\n"),
+			wantPath: "release/release.json", wantClass: "release_config", wantReason: "referenced_input_untracked",
+		},
+		closureCase{
+			name: "outside repository reference", edit: setFixtureText("release/release.json", `{"release_inputs":["../../private.json"]}`+"\n"),
+			wantPath: "release/release.json", wantClass: "release_config", wantReason: "reference_outside_repo",
+		},
+		closureCase{
+			name: "malformed declared JSON", edit: setFixtureText("release/release.json", "{\"release_inputs\":[\n"),
+			wantPath: "release/release.json", wantClass: "release_config", wantReason: "malformed_control_input",
+		},
+		closureCase{
+			name: "malformed YAML control", edit: setFixtureText("config/dependency.yml", "inputs: [unterminated\n"),
+			wantPath: "config/dependency.yml", wantClass: "config", wantReason: "malformed_control_input",
+		},
+		closureCase{
+			name: "tracked symlink", edit: func(files map[string]closureFixtureFile) {
+				files["build/dependency-link"] = closureFixtureFile{symlink: "../go.mod"}
+			},
+			wantPath: "build/dependency-link", wantClass: "build_release_control", wantReason: "tracked_symlink",
+		},
+	)
 
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -169,23 +274,58 @@ require (
     "scripts/release.sh",
     "release/release.json"
   ],
+  "fork": {
+    "intended_prerelease": "v0.0.1-helianthus.1",
+    "lifecycle": "temporary_downstream_patch_carrier",
+    "origin": "https://github.com/Project-Helianthus/dependency-closure-fixture.git"
+  },
+  "license": {
+    "path": "LICENSE",
+    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "module": "github.com/Project-Helianthus/dependency-closure-fixture",
+  "notice_inventory": [],
   "reviewed_dependencies": [
     {
+      "license": {"path": "LICENSE", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
       "module": "github.com/Project-Helianthus/helianthus-eebus-go",
+      "peeled_commit_sha": "1111111111111111111111111111111111111111",
+      "provenance_manifest": {"path": "provenance/closure-manifest.json", "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+      "tag_object_sha": "2222222222222222222222222222222222222222",
+      "tree_sha": "3333333333333333333333333333333333333333",
       "version": "v0.7.1-helianthus.1"
     },
     {
+      "license": {"path": "LICENSE", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
       "module": "github.com/Project-Helianthus/helianthus-ship-go",
+      "peeled_commit_sha": "4444444444444444444444444444444444444444",
+      "provenance_manifest": {"path": "provenance/closure-manifest.json", "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+      "tag_object_sha": "5555555555555555555555555555555555555555",
+      "tree_sha": "6666666666666666666666666666666666666666",
       "version": "v0.6.1-helianthus.1"
     },
     {
+      "license": {"path": "LICENSE", "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
       "module": "github.com/Project-Helianthus/helianthus-spine-go",
+      "peeled_commit_sha": "7777777777777777777777777777777777777777",
+      "provenance_manifest": {"path": "provenance/closure-manifest.json", "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+      "tag_object_sha": "8888888888888888888888888888888888888888",
+      "tree_sha": "9999999999999999999999999999999999999999",
       "version": "v0.7.1-helianthus.1"
     }
   ],
-  "schema": "helianthus.provenance.closure-manifest.v1"
+  "schema": "helianthus.provenance.closure-manifest.v1",
+  "source_header_inventory": {"globs": ["**/*.go"], "headers": []},
+  "upstream": {
+    "peeled_commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "remote": "https://example.invalid/upstream.git",
+    "tag": "v0.0.0",
+    "tag_object_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "tree_sha": "cccccccccccccccccccccccccccccccccccccccc"
+  }
 }
 `},
+		"LICENSE":              {data: "fixture license\n"},
 		"release/nested.json":  {data: `{"module":"github.com/Project-Helianthus/helianthus-ship-go@v0.6.1-helianthus.1"}` + "\n"},
 		"release/release.json": {data: `{"release_inputs":["release/nested.json"]}` + "\n"},
 		"scripts/release.sh":   {data: "#!/bin/sh\nset -eu\ntest -f \"${1:?release config required}\"\n", executable: true},
@@ -235,7 +375,11 @@ func writeClosureFixture(t *testing.T, edit func(map[string]closureFixtureFile))
 		if file.executable {
 			mode = 0o755
 		}
-		if err := os.WriteFile(fullPath, []byte(file.data), mode); err != nil {
+		if file.symlink != "" {
+			if err := os.Symlink(file.symlink, fullPath); err != nil {
+				t.Fatal(err)
+			}
+		} else if err := os.WriteFile(fullPath, []byte(file.data), mode); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -290,7 +434,8 @@ func assertFixtureResult(t *testing.T, root string, result closureResult, test c
 	}
 	evidence := decodeCanonicalEvidence(t, result.evidence)
 	digest := sha256.Sum256(wantInventory)
-	if evidence["schema"] != "helianthus.dependency-closure-evidence.v1" || evidence["tracked_inventory_sha256"] != hex.EncodeToString(digest[:]) {
+	inventory, ok := evidence["tracked_inventory"].(map[string]any)
+	if evidence["schema"] != "helianthus.dependency-closure-evidence.v2" || !ok || inventory["sha256"] != fmt.Sprintf("%x", digest) {
 		t.Errorf("evidence identity/digest mismatch: %s", result.evidence)
 	}
 	assertEvidenceFieldsAreStable(t, evidence)
@@ -364,8 +509,18 @@ func decodeCanonicalEvidence(t *testing.T, data []byte) map[string]any {
 
 func assertEvidenceFieldsAreStable(t *testing.T, evidence map[string]any) {
 	t.Helper()
-	if len(evidence) != 5 {
-		t.Errorf("evidence must contain only inputs, result, schema, tracked_inventory_sha256, violations: %v", evidence)
+	wantFields := []string{"commands", "inputs", "manifest", "result", "schema", "source_sha", "tracked_inventory", "verifier", "violations"}
+	if len(evidence) != len(wantFields) {
+		t.Errorf("evidence has unexpected top-level shape: %v", evidence)
+	}
+	for _, field := range wantFields {
+		if _, ok := evidence[field]; !ok {
+			t.Errorf("evidence lacks %s", field)
+		}
+	}
+	sourceSHA, ok := evidence["source_sha"].(string)
+	if !ok || !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(sourceSHA) {
+		t.Errorf("evidence source_sha = %v; want full commit", evidence["source_sha"])
 	}
 	for _, field := range []string{"inputs", "violations"} {
 		values, ok := evidence[field].([]any)
@@ -379,14 +534,24 @@ func assertEvidenceFieldsAreStable(t *testing.T, evidence map[string]any) {
 				t.Errorf("evidence %s entry is %T, want object", field, value)
 				continue
 			}
-			wantKeys := 2
+			wantKeys := 4
 			if field == "violations" {
 				wantKeys = 3
 			}
-			if len(object) != wantKeys || object["path"] == nil || object["class"] == nil || field == "violations" && object["reason"] == nil {
-				t.Errorf("evidence %s entry must contain only stable path/class/reason fields: %v", field, object)
+			if len(object) != wantKeys || object["path"] == nil || object["class"] == nil || field == "violations" && object["reason"] == nil || field == "inputs" && (object["sha256"] == nil || object["source_sha"] != sourceSHA) {
+				t.Errorf("evidence %s entry has an unstable shape: %v", field, object)
 			}
 		}
+	}
+	for _, field := range []string{"manifest", "verifier", "tracked_inventory"} {
+		object, ok := evidence[field].(map[string]any)
+		if !ok || object["sha256"] == nil || object["source_sha"] != sourceSHA {
+			t.Errorf("evidence %s digest is not source-bound: %v", field, evidence[field])
+		}
+	}
+	commands, ok := evidence["commands"].([]any)
+	if !ok || len(commands) != 5 {
+		t.Errorf("evidence commands = %v; want five versioned commands", evidence["commands"])
 	}
 }
 

@@ -7,10 +7,10 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/ahmetb/go-linq/v3"
 	"github.com/Project-Helianthus/helianthus-spine-go/api"
 	"github.com/Project-Helianthus/helianthus-spine-go/model"
 	"github.com/Project-Helianthus/helianthus-spine-go/util"
+	"github.com/ahmetb/go-linq/v3"
 )
 
 type BindingManager struct {

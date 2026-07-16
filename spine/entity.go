@@ -3,10 +3,10 @@ package spine
 import (
 	"sync"
 
-	"github.com/ahmetb/go-linq/v3"
 	"github.com/Project-Helianthus/helianthus-spine-go/api"
 	"github.com/Project-Helianthus/helianthus-spine-go/model"
 	"github.com/Project-Helianthus/helianthus-spine-go/util"
+	"github.com/ahmetb/go-linq/v3"
 )
 
 const DeviceInformationEntityId uint = 0

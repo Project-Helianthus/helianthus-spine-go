@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"go/format"
 	"go/parser"
 	"go/token"
 	"os"
@@ -24,6 +25,7 @@ const (
 	canonicalVer    = "v0.6.1-helianthus.1"
 	upstreamSpine   = "github.com/enbility/spine-go"
 	upstreamShip    = "github.com/enbility/ship-go"
+	upstreamEEBus   = "github.com/enbility/eebus-go"
 	productionHash  = "5043cb466ee01f0a0d91db54a835759233acea37d163d760c33233b0b3571cf0"
 )
 
@@ -63,7 +65,7 @@ func TestTrackedGoImportsUseCanonicalIdentity(t *testing.T) {
 	root := repositoryRoot(t)
 	var violations []string
 	canonicalCounts := map[string]int{canonicalModule: 0, canonicalShip: 0}
-	for _, path := range trackedGoFiles(t, root) {
+	for _, path := range trackedGoSourceFiles(t, root) {
 		src := readFile(t, filepath.Join(root, path))
 		f, err := parser.ParseFile(token.NewFileSet(), path, src, parser.ImportsOnly)
 		if err != nil {
@@ -105,8 +107,9 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 		Schema string `json:"schema"`
 		Module string `json:"module"`
 		Fork   struct {
-			Origin    string `json:"origin"`
-			Lifecycle string `json:"lifecycle"`
+			Origin             string `json:"origin"`
+			Lifecycle          string `json:"lifecycle"`
+			IntendedPrerelease string `json:"intended_prerelease"`
 		} `json:"fork"`
 		Upstream struct {
 			Remote    string `json:"remote"`
@@ -119,6 +122,27 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 			Path   string `json:"path"`
 			SHA256 string `json:"sha256"`
 		} `json:"license"`
+		NoticeInventory []string `json:"notice_inventory"`
+		SourceHeaders   struct {
+			Globs   []string `json:"globs"`
+			Headers []string `json:"headers"`
+		} `json:"source_header_inventory"`
+		ReviewedDependencies []struct {
+			Module  string `json:"module"`
+			Version string `json:"version"`
+			Tag     string `json:"tag_object_sha"`
+			Commit  string `json:"peeled_commit_sha"`
+			Tree    string `json:"tree_sha"`
+			License struct {
+				Path   string `json:"path"`
+				SHA256 string `json:"sha256"`
+			} `json:"license"`
+			Manifest struct {
+				Path   string `json:"path"`
+				SHA256 string `json:"sha256"`
+			} `json:"provenance_manifest"`
+		} `json:"reviewed_dependencies"`
+		DependencyControlInputs []string `json:"dependency_control_inputs"`
 	}
 	data := readFile(t, path)
 	if err := json.Unmarshal(data, &manifest); err != nil {
@@ -129,6 +153,7 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 		{"module", manifest.Module, canonicalModule},
 		{"fork.origin", manifest.Fork.Origin, "https://github.com/Project-Helianthus/helianthus-spine-go.git"},
 		{"fork.lifecycle", manifest.Fork.Lifecycle, "temporary_downstream_patch_carrier"},
+		{"fork.intended_prerelease", manifest.Fork.IntendedPrerelease, "v0.7.1-helianthus.1"},
 		{"upstream.remote", manifest.Upstream.Remote, "https://github.com/enbility/spine-go.git"},
 		{"upstream.tag", manifest.Upstream.Tag, "v0.7.0"},
 		{"upstream.tag_object_sha", manifest.Upstream.TagObject, "30aeb9ac51c3212d280acd93a9afaf58bc63bd92"},
@@ -141,6 +166,32 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 		if check.got != check.want {
 			t.Errorf("manifest %s = %q; want %q", check.name, check.got, check.want)
 		}
+	}
+	if len(manifest.NoticeInventory) != 0 || len(manifest.SourceHeaders.Headers) != 0 || !strings.EqualFold(strings.Join(manifest.SourceHeaders.Globs, ","), "**/*.go") {
+		t.Errorf("manifest notice/source-header inventories are not explicitly closed: notices=%v source_headers=%v", manifest.NoticeInventory, manifest.SourceHeaders)
+	}
+	if len(manifest.ReviewedDependencies) != 1 {
+		t.Fatalf("manifest reviewed_dependencies = %d; want exactly canonical SHIP", len(manifest.ReviewedDependencies))
+	}
+	ship := manifest.ReviewedDependencies[0]
+	dependencyWants := []struct{ name, got, want string }{
+		{"reviewed.module", ship.Module, canonicalShip},
+		{"reviewed.version", ship.Version, canonicalVer},
+		{"reviewed.tag_object_sha", ship.Tag, "a2a1cdb32c79fcbd3e659187d2f1ec017b8e7fa7"},
+		{"reviewed.peeled_commit_sha", ship.Commit, "3d11169b8cb3e828cd24af066aac016c7edeb23d"},
+		{"reviewed.tree_sha", ship.Tree, "1298a667e4d24c15027adf3775d99182cc174f24"},
+		{"reviewed.license.path", ship.License.Path, "LICENSE"},
+		{"reviewed.license.sha256", ship.License.SHA256, "c853996135802c50b3048937e48022bc00b41ff5f56a31cebe7d686bf91f87db"},
+		{"reviewed.provenance_manifest.path", ship.Manifest.Path, "provenance/closure-manifest.json"},
+		{"reviewed.provenance_manifest.sha256", ship.Manifest.SHA256, "54f91f18ab094825f68db61cad0423b4fadf2720179a09d2168d7cd988a43097"},
+	}
+	for _, check := range dependencyWants {
+		if check.got != check.want {
+			t.Errorf("manifest %s = %q; want %q", check.name, check.got, check.want)
+		}
+	}
+	if len(manifest.DependencyControlInputs) == 0 {
+		t.Error("manifest dependency_control_inputs must be explicit")
 	}
 }
 func TestCommittedClosureVerifierIsExecutable(t *testing.T) {
@@ -158,7 +209,8 @@ func TestCommittedClosureVerifierIsExecutable(t *testing.T) {
 }
 func TestWorkflowSupportsReleaseBranchAndSARIF(t *testing.T) {
 	path := filepath.Join(repositoryRoot(t), ".github", "workflows", "default.yml")
-	branch, permissions := workflowContract(string(readFile(t, path)))
+	workflow := string(readFile(t, path))
+	branch, permissions := workflowContract(workflow)
 	if !branch {
 		t.Error("workflow push branches do not include helianthus-v0.7")
 	}
@@ -171,6 +223,35 @@ func TestWorkflowSupportsReleaseBranchAndSARIF(t *testing.T) {
 			t.Errorf("workflow permission %s = %q; want %q", name, permissions[name], value)
 		}
 	}
+	required := []string{
+		"scripts/verify_dependency_closure.py",
+		"gofmt -l",
+		"GOWORK: \"off\"",
+		"GOTOOLCHAIN: local",
+		"GOFLAGS: -mod=readonly",
+		"go list -m all",
+		"go mod graph",
+		"go list -deps ./...",
+		"resolved-graph-closure.json",
+		"git rev-parse HEAD",
+		"go version",
+		"actions/upload-artifact",
+	}
+	for _, fragment := range required {
+		if !strings.Contains(workflow, fragment) {
+			t.Errorf("workflow lacks required closure fragment %q", fragment)
+		}
+	}
+	if strings.Index(workflow, "scripts/verify_dependency_closure.py") > strings.Index(workflow, "go list -m all") {
+		t.Error("workflow runs resolved graph commands before tracked closure verifier")
+	}
+	if strings.Contains(workflow, "--issues-exit-code=0") || strings.Contains(workflow, "version: latest") || strings.Contains(workflow, "@master") {
+		t.Error("workflow retains a lint bypass or mutable golangci selection")
+	}
+	uses := regexp.MustCompile(`(?m)^\s*uses:\s+[^\s]+@([0-9a-f]{40})\s+#\s+v\S+\s*$`).FindAllStringSubmatch(workflow, -1)
+	if len(uses) != 7 {
+		t.Errorf("workflow immutable action pins = %d; want 7 full commit pins with tag comments", len(uses))
+	}
 }
 func TestProductionSourcesMatchUpstreamApartFromImportIdentity(t *testing.T) {
 	root := repositoryRoot(t)
@@ -180,6 +261,10 @@ func TestProductionSourcesMatchUpstreamApartFromImportIdentity(t *testing.T) {
 			continue
 		}
 		src := normalizeCanonicalImports(t, path, readFile(t, filepath.Join(root, path)))
+		src, err := format.Source(src)
+		if err != nil {
+			t.Fatalf("format normalized production source %s: %v", path, err)
+		}
 		fmt.Fprintf(h, "%s\x00", path)
 		h.Write(src)
 		h.Write([]byte{0})
@@ -216,6 +301,24 @@ func trackedGoFiles(t *testing.T, root string) []string {
 		t.Fatalf("list tracked Go files: %v", err)
 	}
 	paths := strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00")
+	sort.Strings(paths)
+	return paths
+}
+
+func trackedGoSourceFiles(t *testing.T, root string) []string {
+	t.Helper()
+	cmd := exec.Command("git", "ls-files", "-z")
+	cmd.Dir = root
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("list tracked sources: %v", err)
+	}
+	var paths []string
+	for _, path := range strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00") {
+		if regexp.MustCompile(`\.go(?:$|[._-])`).MatchString(filepath.Base(path)) {
+			paths = append(paths, path)
+		}
+	}
 	sort.Strings(paths)
 	return paths
 }

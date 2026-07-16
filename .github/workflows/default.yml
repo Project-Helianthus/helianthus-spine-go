@@ -23,21 +23,102 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
-          go-version: ^1.21
+          go-version-file: go.mod
+
+      - name: Verify tracked dependency closure
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          set -euo pipefail
+          closure_dir="$RUNNER_TEMP/dependency-closure"
+          mkdir -p "$closure_dir"
+          python3 scripts/verify_dependency_closure.py \
+            --repo . \
+            --manifest provenance/closure-manifest.json \
+            --inventory-output "$closure_dir/dependency-control-paths.nul" \
+            --evidence-output "$closure_dir/dependency-control-closure.json"
+
+      - name: Check Go formatting
+        run: |
+          set -euo pipefail
+          mapfile -d '' go_files < <(git ls-files -z -- '*.go')
+          unformatted="$(gofmt -l "${go_files[@]}")"
+          test -z "$unformatted" || { printf '%s\n' "$unformatted"; exit 1; }
+
+      - name: Verify resolved dependency graphs
+        env:
+          GOFLAGS: -mod=readonly
+          GOTOOLCHAIN: local
+          GOWORK: "off"
+        run: |
+          set -euo pipefail
+          closure_dir="$RUNNER_TEMP/dependency-closure"
+          go list -m all > "$closure_dir/go-list-m-all.txt"
+          go mod graph > "$closure_dir/go-mod-graph.txt"
+          go list -deps ./... > "$closure_dir/go-list-deps.txt"
+          upstream_root=github.com/enbility
+          for module in ship-go spine-go eebus-go; do
+            ! grep -Fq "$upstream_root/$module" "$closure_dir/go-list-m-all.txt"
+            ! grep -Fq "$upstream_root/$module" "$closure_dir/go-mod-graph.txt"
+            ! grep -Fq "$upstream_root/$module" "$closure_dir/go-list-deps.txt"
+          done
+          SOURCE_SHA="$(git rev-parse HEAD)" \
+          GO_VERSION="$(go version)" \
+          GIT_VERSION="$(git --version)" \
+          PYTHON_VERSION="$(python3 --version)" \
+          CLOSURE_DIR="$closure_dir" \
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["CLOSURE_DIR"])
+          source_sha = os.environ["SOURCE_SHA"]
+          names = ["go-list-m-all.txt", "go-mod-graph.txt", "go-list-deps.txt"]
+          evidence = {
+              "artifacts": [
+                  {
+                      "path": name,
+                      "sha256": hashlib.sha256((root / name).read_bytes()).hexdigest(),
+                      "source_sha": source_sha,
+                  }
+                  for name in names
+              ],
+              "schema": "helianthus.resolved-graph-closure.v1",
+              "source_sha": source_sha,
+              "tools": {
+                  "git": os.environ["GIT_VERSION"],
+                  "go": os.environ["GO_VERSION"],
+                  "python": os.environ["PYTHON_VERSION"],
+              },
+          }
+          output = json.dumps(evidence, sort_keys=True, separators=(",", ":")) + "\n"
+          (root / "resolved-graph-closure.json").write_text(output, encoding="utf-8")
+          PY
+
+      - name: Retain dependency closure evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dependency-closure
+          path: ${{ runner.temp }}/dependency-closure/
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Build
         run: go build -v ./...
 
       - name: Lint
-        uses: golangci/golangci-lint-action@master
+        uses: golangci/golangci-lint-action@55c2c1448f86e01eaae002a5a3a9624417608d84 # v6.5.2
         with:
-          version: latest
-          args: --timeout=3m --issues-exit-code=0 ./...
+          version: v1.64.8
+          args: --timeout=3m ./...
 
       - name: Test
         run: go test -race -v -coverprofile=coverage_temp.out  -covermode=atomic ./...
@@ -47,17 +128,17 @@ jobs:
           grep -v "/spine-go/mocks/" coverage_temp.out > coverage.out
 
       - name: Send coverage
-        uses: coverallsapp/github-action@v2
+        uses: coverallsapp/github-action@5cbfd81b66ca5d10c19b062c04de0199c215fb6e # v2
         with:
           file: coverage.out
 
       - name: Run Gosec Security Scanner
-        uses: securego/gosec@v2.20.0
+        uses: securego/gosec@6fbd381238e97e1d1f3358f0d6d65de78dcf9245 # v2.20.0
         with:
           # we let the report trigger content trigger a failure using the GitHub Security features.
           args: '-no-fail -fmt sarif -out results.sarif ./...'
       - name: Upload SARIF file
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@b7351df727350dca84cb9d725d57dcf5bc82ba26 # v3
         with:
           # Path to SARIF file relative to the root of the repository
           sarif_file: results.sarif
