@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"reflect"
 
-	"github.com/enbility/spine-go/util"
+	"github.com/Project-Helianthus/helianthus-spine-go/util"
 )
 
 func (r *MsgCounterType) String() string {

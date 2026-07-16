@@ -1,0 +1,50 @@
+{
+  "dependency_control_inputs": [
+    ".github/workflows/default.yml",
+    "api/.mockery.yaml",
+    "go.mod",
+    "go.sum"
+  ],
+  "fork": {
+    "intended_prerelease": "v0.7.1-helianthus.1",
+    "lifecycle": "temporary_downstream_patch_carrier",
+    "origin": "https://github.com/Project-Helianthus/helianthus-spine-go.git"
+  },
+  "license": {
+    "path": "LICENSE",
+    "sha256": "c853996135802c50b3048937e48022bc00b41ff5f56a31cebe7d686bf91f87db"
+  },
+  "module": "github.com/Project-Helianthus/helianthus-spine-go",
+  "notice_inventory": [],
+  "reviewed_dependencies": [
+    {
+      "license": {
+        "path": "LICENSE",
+        "sha256": "c853996135802c50b3048937e48022bc00b41ff5f56a31cebe7d686bf91f87db"
+      },
+      "module": "github.com/Project-Helianthus/helianthus-ship-go",
+      "peeled_commit_sha": "3d11169b8cb3e828cd24af066aac016c7edeb23d",
+      "provenance_manifest": {
+        "path": "provenance/closure-manifest.json",
+        "sha256": "54f91f18ab094825f68db61cad0423b4fadf2720179a09d2168d7cd988a43097"
+      },
+      "tag_object_sha": "a2a1cdb32c79fcbd3e659187d2f1ec017b8e7fa7",
+      "tree_sha": "1298a667e4d24c15027adf3775d99182cc174f24",
+      "version": "v0.6.1-helianthus.1"
+    }
+  ],
+  "schema": "helianthus.provenance.closure-manifest.v1",
+  "source_header_inventory": {
+    "globs": [
+      "**/*.go"
+    ],
+    "headers": []
+  },
+  "upstream": {
+    "peeled_commit_sha": "0eef075cb6e8f697355a2850344333452f5590cf",
+    "remote": "https://github.com/enbility/spine-go.git",
+    "tag": "v0.7.0",
+    "tag_object_sha": "30aeb9ac51c3212d280acd93a9afaf58bc63bd92",
+    "tree_sha": "e070b8272e357643ec855c4eab22be4dd03cb89b"
+  }
+}

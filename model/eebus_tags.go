@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/enbility/ship-go/logging"
+	"github.com/Project-Helianthus/helianthus-ship-go/logging"
 )
 
 type EEBusTag string

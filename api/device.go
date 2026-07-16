@@ -1,8 +1,8 @@
 package api
 
 import (
-	shipapi "github.com/enbility/ship-go/api"
-	"github.com/enbility/spine-go/model"
+	shipapi "github.com/Project-Helianthus/helianthus-ship-go/api"
+	"github.com/Project-Helianthus/helianthus-spine-go/model"
 )
 
 /* Device */

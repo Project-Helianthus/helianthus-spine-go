@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"sort"
 
-	"github.com/enbility/spine-go/util"
+	"github.com/Project-Helianthus/helianthus-spine-go/util"
 )
 
 type Updater interface {
