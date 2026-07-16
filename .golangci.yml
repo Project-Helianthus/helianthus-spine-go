@@ -44,6 +44,13 @@ linters:
 issues:
   # Excluding configuration per-path, per-linter, per-text and per-source
   exclude-rules:
+    # Mechanical fork baseline: exact upstream v0.7.0 expression at line 297.
+    - path: ^model/commondatatypes_additions\.go$
+      text: "G115: integer overflow conversion int -> int8"
+      source: "^\\s*scaleValue = ScaleType\\(-numberOfDecimals\\)$"
+      linters:
+        - gosec
+
     # Exclude some linters from running on tests files.
     - path: _test\.go
       linters:
