@@ -7,9 +7,14 @@ on:
   push:
     branches:
       - dev
+      - helianthus-v0.7
       - main
   pull_request:
   workflow_call:
+
+permissions:
+  contents: read
+  security-events: write
 
 jobs:
   build:
@@ -32,8 +37,6 @@ jobs:
         uses: golangci/golangci-lint-action@master
         with:
           version: latest
-          skip-pkg-cache: true
-          skip-build-cache: true
           args: --timeout=3m --issues-exit-code=0 ./...
 
       - name: Test
