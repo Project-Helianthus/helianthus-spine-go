@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	verifierCLI     = "scripts/verify_dependency_closure.py --root <git-repository> --inventory-out <path> --evidence-out <path>"
+	verifierCLI     = "python3 scripts/verify_dependency_closure.py --repo . --manifest provenance/closure-manifest.json --inventory-output <path> --evidence-output <path>"
 	canonicalEEBus  = "github.com/Project-Helianthus/helianthus-eebus-go"
 	reviewedSpine   = "v0.7.1-helianthus.1"
 	reviewedEEBus   = "v0.7.1-helianthus.1"
@@ -160,8 +160,32 @@ require (
 	example.com/unrelated v0.0.0-20260716000000-0123456789ab
 )
 `},
-		"go.sum":               {data: "github.com/Project-Helianthus/helianthus-ship-go v0.6.1-helianthus.1/go.mod h1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n"},
-		"main.go":              {data: "package fixture\n\nimport _ \"github.com/Project-Helianthus/helianthus-ship-go/api\"\n"},
+		"go.sum":  {data: "github.com/Project-Helianthus/helianthus-ship-go v0.6.1-helianthus.1/go.mod h1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n"},
+		"main.go": {data: "package fixture\n\nimport _ \"github.com/Project-Helianthus/helianthus-ship-go/api\"\n"},
+		"provenance/closure-manifest.json": {data: `{
+  "dependency_control_inputs": [
+    ".github/actions/release/action.yml",
+    ".github/workflows/release.yml",
+    "scripts/release.sh",
+    "release/release.json"
+  ],
+  "reviewed_dependencies": [
+    {
+      "module": "github.com/Project-Helianthus/helianthus-eebus-go",
+      "version": "v0.7.1-helianthus.1"
+    },
+    {
+      "module": "github.com/Project-Helianthus/helianthus-ship-go",
+      "version": "v0.6.1-helianthus.1"
+    },
+    {
+      "module": "github.com/Project-Helianthus/helianthus-spine-go",
+      "version": "v0.7.1-helianthus.1"
+    }
+  ],
+  "schema": "helianthus.provenance.closure-manifest.v1"
+}
+`},
 		"release/nested.json":  {data: `{"module":"github.com/Project-Helianthus/helianthus-ship-go@v0.6.1-helianthus.1"}` + "\n"},
 		"release/release.json": {data: `{"release_inputs":["release/nested.json"]}` + "\n"},
 		"scripts/release.sh":   {data: "#!/bin/sh\nset -eu\ntest -f \"${1:?release config required}\"\n", executable: true},
@@ -236,7 +260,7 @@ func runFixtureVerifier(t *testing.T, verifier, root string) closureResult {
 	outputDir := t.TempDir()
 	inventoryPath := filepath.Join(outputDir, "tracked.nul")
 	evidencePath := filepath.Join(outputDir, "evidence.json")
-	cmd := exec.Command(verifier, "--root", root, "--inventory-out", inventoryPath, "--evidence-out", evidencePath)
+	cmd := exec.Command("python3", verifier, "--repo", ".", "--manifest", "provenance/closure-manifest.json", "--inventory-output", inventoryPath, "--evidence-output", evidencePath)
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(), "GOWORK=off", "GOPROXY=off", "GOSUMDB=off")
 	var stdout, stderr bytes.Buffer
