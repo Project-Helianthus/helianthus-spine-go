@@ -3,7 +3,7 @@
 package mocks
 
 import (
-	model "github.com/enbility/spine-go/model"
+	model "github.com/Project-Helianthus/helianthus-spine-go/model"
 	mock "github.com/stretchr/testify/mock"
 )
 

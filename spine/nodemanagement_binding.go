@@ -4,9 +4,9 @@ import (
 	"fmt"
 
 	"github.com/ahmetb/go-linq/v3"
-	"github.com/enbility/spine-go/api"
-	"github.com/enbility/spine-go/model"
-	"github.com/enbility/spine-go/util"
+	"github.com/Project-Helianthus/helianthus-spine-go/api"
+	"github.com/Project-Helianthus/helianthus-spine-go/model"
+	"github.com/Project-Helianthus/helianthus-spine-go/util"
 )
 
 func NewNodeManagementBindingRequestCallType(clientAddress *model.FeatureAddressType, serverAddress *model.FeatureAddressType, featureType model.FeatureTypeType) *model.NodeManagementBindingRequestCallType {

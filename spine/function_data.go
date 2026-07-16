@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/enbility/ship-go/logging"
-	"github.com/enbility/spine-go/api"
-	"github.com/enbility/spine-go/model"
-	"github.com/enbility/spine-go/util"
+	"github.com/Project-Helianthus/helianthus-ship-go/logging"
+	"github.com/Project-Helianthus/helianthus-spine-go/api"
+	"github.com/Project-Helianthus/helianthus-spine-go/model"
+	"github.com/Project-Helianthus/helianthus-spine-go/util"
 )
 
 type FunctionData[T any] struct {

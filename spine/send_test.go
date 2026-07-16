@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/enbility/spine-go/model"
-	"github.com/enbility/spine-go/util"
+	"github.com/Project-Helianthus/helianthus-spine-go/model"
+	"github.com/Project-Helianthus/helianthus-spine-go/util"
 	"github.com/stretchr/testify/assert"
 )
 

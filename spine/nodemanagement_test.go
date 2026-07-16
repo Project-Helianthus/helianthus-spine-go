@@ -4,9 +4,9 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/enbility/spine-go/api"
-	"github.com/enbility/spine-go/mocks"
-	"github.com/enbility/spine-go/model"
+	"github.com/Project-Helianthus/helianthus-spine-go/api"
+	"github.com/Project-Helianthus/helianthus-spine-go/mocks"
+	"github.com/Project-Helianthus/helianthus-spine-go/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )

@@ -1,8 +1,8 @@
 package spine
 
 import (
-	"github.com/enbility/spine-go/api"
-	"github.com/enbility/spine-go/model"
+	"github.com/Project-Helianthus/helianthus-spine-go/api"
+	"github.com/Project-Helianthus/helianthus-spine-go/model"
 )
 
 type Operations struct {
