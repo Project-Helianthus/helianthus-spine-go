@@ -324,7 +324,11 @@ def validate_manifest(value: Any) -> tuple[bool, dict[str, str], list[str]]:
             )
             or not all(
                 isinstance(patch.get(field), str)
-                and patch[field].startswith("https://github.com/enbility/spine-go/")
+                and re.fullmatch(
+                    r"https://github[.]com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/"
+                    r"(?:issues|pull)/[1-9][0-9]*",
+                    patch[field],
+                )
                 for field in ("upstream_issue", "upstream_pr")
             )
         ):
