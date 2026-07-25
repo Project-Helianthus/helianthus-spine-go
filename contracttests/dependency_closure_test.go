@@ -27,7 +27,7 @@ const (
 	upstreamSpine   = "github.com/enbility/spine-go"
 	upstreamShip    = "github.com/enbility/ship-go"
 	upstreamEEBus   = "github.com/enbility/eebus-go"
-	productionHash  = "e71a2e0535b870fe4f55f03bdc216b6bac18a1cf8ffbf02403a664145f687377"
+	productionHash  = "4d254ae77420df429da627b283f9875d65dbaee15a3a22b1c083c6ca665e7dfc"
 )
 
 func TestModuleDependencyClosure(t *testing.T) {
@@ -144,11 +144,12 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 			} `json:"provenance_manifest"`
 		} `json:"reviewed_dependencies"`
 		DownstreamPatches []struct {
-			Files       []string `json:"files"`
-			HeadCommit  string   `json:"head_commit_sha"`
-			Issue       string   `json:"issue"`
-			PatchSHA256 string   `json:"patch_sha256"`
-			PullRequest string   `json:"pull_request"`
+			BaseCommit    string   `json:"base_commit_sha"`
+			ContentSHA256 string   `json:"content_sha256"`
+			Files         []string `json:"files"`
+			Issue         string   `json:"issue"`
+			PatchSHA256   string   `json:"patch_sha256"`
+			PullRequest   string   `json:"pull_request"`
 		} `json:"downstream_patches"`
 		ReviewedPatches []struct {
 			Files       []string `json:"files"`
@@ -164,7 +165,7 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 		t.Fatalf("parse %s: %v", path, err)
 	}
 	wants := []struct{ name, got, want string }{
-		{"schema", manifest.Schema, "helianthus.provenance.closure-manifest.v1"},
+		{"schema", manifest.Schema, "helianthus.provenance.closure-manifest.v2"},
 		{"module", manifest.Module, canonicalModule},
 		{"fork.origin", manifest.Fork.Origin, "https://github.com/Project-Helianthus/helianthus-spine-go.git"},
 		{"fork.lifecycle", manifest.Fork.Lifecycle, "temporary_downstream_patch_carrier"},
@@ -196,9 +197,8 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 	}
 	downstream := manifest.DownstreamPatches[0]
 	downstreamWants := []struct{ name, got, want string }{
-		{"downstream.head_commit_sha", downstream.HeadCommit, "1e1e5546e42a26ba65c4e8596e95f4847ba396fe"},
+		{"downstream.base_commit_sha", downstream.BaseCommit, "2fdb4319c69e9afd4f4d1b78b3f40da43d976ce0"},
 		{"downstream.issue", downstream.Issue, "https://github.com/Project-Helianthus/helianthus-spine-go/issues/5"},
-		{"downstream.patch_sha256", downstream.PatchSHA256, "4ae2baed0a523d0579de4fc7cbb7ab4b0904cc42e77b9895dd1c947d9085d8cf"},
 		{"downstream.pull_request", downstream.PullRequest, "https://github.com/Project-Helianthus/helianthus-spine-go/pull/6"},
 	}
 	for _, check := range downstreamWants {
@@ -211,7 +211,6 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 		"contracttests/dependency_closure_remediation_test.go",
 		"contracttests/dependency_closure_test.go",
 		"contracttests/dependency_closure_verifier_test.go",
-		"provenance/closure-manifest.json",
 		"scripts/verify_dependency_closure.py",
 		"spine/device_local.go",
 		"spine/issue5_remote_removal_race_test.go",
@@ -221,9 +220,8 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 	}
 	orderedEvents := manifest.DownstreamPatches[1]
 	orderedEventWants := []struct{ name, got, want string }{
-		{"ordered-events.head_commit_sha", orderedEvents.HeadCommit, "4d0ab38016ccd081eb9d3bdb0d591fd5ceb0d3b5"},
+		{"ordered-events.base_commit_sha", orderedEvents.BaseCommit, "1e1e5546e42a26ba65c4e8596e95f4847ba396fe"},
 		{"ordered-events.issue", orderedEvents.Issue, "https://github.com/Project-Helianthus/helianthus-spine-go/issues/7"},
-		{"ordered-events.patch_sha256", orderedEvents.PatchSHA256, "d52801ff5df3b00af779472664559ae8784edc1a606b487f0e4d35a5d2ba5e6a"},
 		{"ordered-events.pull_request", orderedEvents.PullRequest, "https://github.com/Project-Helianthus/helianthus-spine-go/pull/8"},
 	}
 	for _, check := range orderedEventWants {
@@ -231,9 +229,32 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 			t.Errorf("manifest %s = %q; want %q", check.name, check.got, check.want)
 		}
 	}
-	wantOrderedEventFiles := []string{"spine/events.go", "spine/issue7_application_event_order_red_test.go"}
+	wantOrderedEventFiles := []string{
+		"contracttests/dependency_closure_remediation_test.go",
+		"contracttests/dependency_closure_test.go",
+		"contracttests/dependency_closure_verifier_test.go",
+		"scripts/verify_dependency_closure.py",
+		"spine/events.go",
+		"spine/issue7_application_event_order_red_test.go",
+	}
 	if !reflect.DeepEqual(orderedEvents.Files, wantOrderedEventFiles) {
 		t.Errorf("manifest ordered-event files = %v; want %v", orderedEvents.Files, wantOrderedEventFiles)
+	}
+	for name, record := range map[string]struct {
+		content string
+		patch   string
+	}{
+		"downstream":     {content: downstream.ContentSHA256, patch: downstream.PatchSHA256},
+		"ordered-events": {content: orderedEvents.ContentSHA256, patch: orderedEvents.PatchSHA256},
+	} {
+		for kind, digest := range map[string]string{"content": record.content, "patch": record.patch} {
+			if !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(digest) {
+				t.Errorf("manifest %s %s digest = %q; want SHA-256", name, kind, digest)
+			}
+		}
+		if record.content == record.patch {
+			t.Errorf("manifest %s content and patch digests must bind independent representations", name)
+		}
 	}
 	patch := manifest.ReviewedPatches[0]
 	patchWants := []struct{ name, got, want string }{

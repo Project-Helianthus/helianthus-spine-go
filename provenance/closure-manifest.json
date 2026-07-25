@@ -35,29 +35,34 @@
   ],
   "downstream_patches": [
     {
+      "base_commit_sha": "2fdb4319c69e9afd4f4d1b78b3f40da43d976ce0",
+      "content_sha256": "e2ca3091f5f5ac88cc0b2892869f6dbc216857b75113915a96f29299ac53435e",
       "files": [
         ".github/workflows/default.yml",
         "contracttests/dependency_closure_remediation_test.go",
         "contracttests/dependency_closure_test.go",
         "contracttests/dependency_closure_verifier_test.go",
-        "provenance/closure-manifest.json",
         "scripts/verify_dependency_closure.py",
         "spine/device_local.go",
         "spine/issue5_remote_removal_race_test.go"
       ],
-      "head_commit_sha": "1e1e5546e42a26ba65c4e8596e95f4847ba396fe",
       "issue": "https://github.com/Project-Helianthus/helianthus-spine-go/issues/5",
-      "patch_sha256": "4ae2baed0a523d0579de4fc7cbb7ab4b0904cc42e77b9895dd1c947d9085d8cf",
+      "patch_sha256": "0b7bbbfdddcec05d2ce84ed25b9a7f254cc14370fb551ebeb36ef493d035cada",
       "pull_request": "https://github.com/Project-Helianthus/helianthus-spine-go/pull/6"
     },
     {
+      "base_commit_sha": "1e1e5546e42a26ba65c4e8596e95f4847ba396fe",
+      "content_sha256": "d6e83f0f31dc7d1250eadcf0d715048a8f31300fe56f3377e869ef4c90770703",
       "files": [
+        "contracttests/dependency_closure_remediation_test.go",
+        "contracttests/dependency_closure_test.go",
+        "contracttests/dependency_closure_verifier_test.go",
+        "scripts/verify_dependency_closure.py",
         "spine/events.go",
         "spine/issue7_application_event_order_red_test.go"
       ],
-      "head_commit_sha": "4d0ab38016ccd081eb9d3bdb0d591fd5ceb0d3b5",
       "issue": "https://github.com/Project-Helianthus/helianthus-spine-go/issues/7",
-      "patch_sha256": "d52801ff5df3b00af779472664559ae8784edc1a606b487f0e4d35a5d2ba5e6a",
+      "patch_sha256": "8b1fd0e77908b66785498f1f9db1c2c55b0458ecfea4b4d6e760d827b61e3f87",
       "pull_request": "https://github.com/Project-Helianthus/helianthus-spine-go/pull/8"
     }
   ],
@@ -72,7 +77,7 @@
       "upstream_pr": "https://github.com/enbility/spine-go/pull/39"
     }
   ],
-  "schema": "helianthus.provenance.closure-manifest.v1",
+  "schema": "helianthus.provenance.closure-manifest.v2",
   "source_header_inventory": {
     "globs": [
       "**/*.go"
