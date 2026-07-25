@@ -42,6 +42,15 @@
       "issue": "https://github.com/Project-Helianthus/helianthus-spine-go/issues/5",
       "patch_sha256": "5c2ceebff36fb0fdb60ad40cfaff85c164c68bdfeff4ab75852c8fbf2ebf9e95",
       "pull_request": "https://github.com/Project-Helianthus/helianthus-spine-go/pull/6"
+    },
+    {
+      "files": [
+        "spine/device_local.go"
+      ],
+      "head_commit_sha": "70cae6c2b059e548d717455f367f592010f1457a",
+      "issue": "https://github.com/Project-Helianthus/helianthus-spine-go/issues/5",
+      "patch_sha256": "216cbcb946f377355cefd5f1346c626495dfaee611642c23f01e1a7fac57bd28",
+      "pull_request": "https://github.com/Project-Helianthus/helianthus-spine-go/pull/6"
     }
   ],
   "reviewed_patches": [

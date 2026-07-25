@@ -26,7 +26,7 @@ const (
 	upstreamSpine   = "github.com/enbility/spine-go"
 	upstreamShip    = "github.com/enbility/ship-go"
 	upstreamEEBus   = "github.com/enbility/eebus-go"
-	productionHash  = "ea49b18801acdef78b3fffa6a25f5babb538d3fca1318fc036f77e61ab52db82"
+	productionHash  = "1cef141c0e7e7d93eb23a6e7cca92ea7bb546690d0218a7ee6d232df86a0e8d9"
 )
 
 func TestModuleDependencyClosure(t *testing.T) {
@@ -190,8 +190,8 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 	if len(manifest.ReviewedPatches) != 1 {
 		t.Fatalf("manifest reviewed_patches = %d; want exactly one upstream race fix", len(manifest.ReviewedPatches))
 	}
-	if len(manifest.DownstreamPatches) != 1 {
-		t.Fatalf("manifest downstream_patches = %d; want exactly one pending upstream contribution", len(manifest.DownstreamPatches))
+	if len(manifest.DownstreamPatches) != 2 {
+		t.Fatalf("manifest downstream_patches = %d; want two reviewed commits in one pending upstream contribution", len(manifest.DownstreamPatches))
 	}
 	downstream := manifest.DownstreamPatches[0]
 	downstreamWants := []struct{ name, got, want string }{
@@ -207,6 +207,21 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 	}
 	if len(downstream.Files) != 1 || downstream.Files[0] != "spine/device_local.go" {
 		t.Errorf("manifest downstream files = %v; want [spine/device_local.go]", downstream.Files)
+	}
+	remediation := manifest.DownstreamPatches[1]
+	remediationWants := []struct{ name, got, want string }{
+		{"remediation.head_commit_sha", remediation.HeadCommit, "70cae6c2b059e548d717455f367f592010f1457a"},
+		{"remediation.issue", remediation.Issue, "https://github.com/Project-Helianthus/helianthus-spine-go/issues/5"},
+		{"remediation.patch_sha256", remediation.PatchSHA256, "216cbcb946f377355cefd5f1346c626495dfaee611642c23f01e1a7fac57bd28"},
+		{"remediation.pull_request", remediation.PullRequest, "https://github.com/Project-Helianthus/helianthus-spine-go/pull/6"},
+	}
+	for _, check := range remediationWants {
+		if check.got != check.want {
+			t.Errorf("manifest %s = %q; want %q", check.name, check.got, check.want)
+		}
+	}
+	if len(remediation.Files) != 1 || remediation.Files[0] != "spine/device_local.go" {
+		t.Errorf("manifest remediation files = %v; want [spine/device_local.go]", remediation.Files)
 	}
 	patch := manifest.ReviewedPatches[0]
 	patchWants := []struct{ name, got, want string }{
