@@ -12,6 +12,7 @@ type eventHandlerItem struct {
 	Level   api.EventHandlerLevel
 	Handler api.EventHandlerInterface
 
+	subscribed bool
 	dispatchMu sync.Mutex
 	pending    []api.EventPayload
 	running    bool
@@ -31,13 +32,15 @@ func (r *events) subscribe(level api.EventHandlerLevel, handler api.EventHandler
 
 	for _, item := range r.handlers {
 		if item.Level == level && item.Handler == handler {
+			item.subscribed = true
 			return nil
 		}
 	}
 
 	newHandlerItem := &eventHandlerItem{
-		Level:   level,
-		Handler: handler,
+		Level:      level,
+		Handler:    handler,
+		subscribed: true,
 	}
 	r.handlers = append(r.handlers, newHandlerItem)
 
@@ -58,14 +61,11 @@ func (r *events) unsubscribe(level api.EventHandlerLevel, handler api.EventHandl
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	var newHandlers []*eventHandlerItem
 	for _, item := range r.handlers {
-		if item.Level != level || item.Handler != handler {
-			newHandlers = append(newHandlers, item)
+		if item.Level == level && item.Handler == handler {
+			item.subscribed = false
 		}
 	}
-
-	r.handlers = newHandlers
 
 	return nil
 }
@@ -78,8 +78,12 @@ func (r *events) Unsubscribe(handler api.EventHandlerInterface) error {
 // Publish an event to all subscribers
 func (r *events) Publish(payload api.EventPayload) {
 	r.mu.Lock()
-	handler := make([]*eventHandlerItem, len(r.handlers))
-	copy(handler, r.handlers)
+	handler := make([]*eventHandlerItem, 0, len(r.handlers))
+	for _, item := range r.handlers {
+		if item.subscribed {
+			handler = append(handler, item)
+		}
+	}
 	r.mu.Unlock()
 
 	// Use different locks, so unpublish is possible in the event handlers

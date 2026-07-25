@@ -112,12 +112,80 @@ func TestIssue7ApplicationCallbackMayUnsubscribeItself(t *testing.T) {
 	}
 }
 
+func TestIssue7ReSubscribeKeepsTheExistingDispatcher(t *testing.T) {
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	resubscribed := make(chan struct{})
+	secondEntered := make(chan struct{})
+	handler := &issue7ReSubscribeHandler{
+		firstEntered:  firstEntered,
+		releaseFirst:  releaseFirst,
+		resubscribed:  resubscribed,
+		secondEntered: secondEntered,
+	}
+	if err := Events.Subscribe(handler); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = Events.Unsubscribe(handler)
+	})
+
+	Events.Publish(api.EventPayload{Ski: "first"})
+	select {
+	case <-firstEntered:
+	case <-time.After(time.Second):
+		t.Fatal("first callback did not start")
+	}
+	select {
+	case <-resubscribed:
+	case <-time.After(time.Second):
+		t.Fatal("first callback did not re-subscribe")
+	}
+
+	Events.Publish(api.EventPayload{Ski: "second"})
+	select {
+	case <-secondEntered:
+		t.Fatal("re-subscribed callback bypassed the existing dispatcher")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseFirst)
+	select {
+	case <-secondEntered:
+	case <-time.After(time.Second):
+		t.Fatal("second callback did not run after the first completed")
+	}
+}
+
 type issue7FuncHandler struct {
 	handle func(api.EventPayload)
 }
 
 func (handler *issue7FuncHandler) HandleEvent(payload api.EventPayload) {
 	handler.handle(payload)
+}
+
+type issue7ReSubscribeHandler struct {
+	firstEntered  chan struct{}
+	releaseFirst  chan struct{}
+	resubscribed  chan struct{}
+	secondEntered chan struct{}
+}
+
+func (handler *issue7ReSubscribeHandler) HandleEvent(payload api.EventPayload) {
+	switch payload.Ski {
+	case "first":
+		close(handler.firstEntered)
+		if err := Events.Unsubscribe(handler); err != nil {
+			panic(err)
+		}
+		if err := Events.Subscribe(handler); err != nil {
+			panic(err)
+		}
+		close(handler.resubscribed)
+		<-handler.releaseFirst
+	case "second":
+		close(handler.secondEntered)
+	}
 }
 
 type issue7OrderedHandler struct {
