@@ -20,8 +20,9 @@ from typing import Any
 
 
 EVIDENCE_SCHEMA = "helianthus.dependency-closure-evidence.v2"
-MANIFEST_SCHEMA = "helianthus.provenance.closure-manifest.v1"
+MANIFEST_SCHEMA = "helianthus.provenance.closure-manifest.v2"
 VERIFIER_PATH = "scripts/verify_dependency_closure.py"
+SELECTED_CONTENT_DOMAIN = b"helianthus.selected-file-content.v1\0"
 UPSTREAM_MODULES = tuple(
     "github.com/enbility/" + name for name in ("ship-go", "spine-go", "eebus-go")
 )
@@ -342,8 +343,9 @@ def validate_manifest(
 
     downstream_patches = value.get("downstream_patches")
     downstream_patch_keys = {
+        "base_commit_sha",
+        "content_sha256",
         "files",
-        "head_commit_sha",
         "issue",
         "patch_sha256",
         "pull_request",
@@ -357,11 +359,15 @@ def validate_manifest(
             or set(patch) != downstream_patch_keys
             or not is_string_list(patch.get("files"))
             or not patch["files"]
-            or any(normalize_repo_path(path) is None for path in patch["files"])
-            or not isinstance(patch.get("head_commit_sha"), str)
-            or SHA40_RE.fullmatch(patch["head_commit_sha"]) is None
-            or not isinstance(patch.get("patch_sha256"), str)
-            or SHA256_RE.fullmatch(patch["patch_sha256"]) is None
+            or patch["files"] != sorted(set(patch["files"]))
+            or any(normalize_repo_path(path) != path for path in patch["files"])
+            or not isinstance(patch.get("base_commit_sha"), str)
+            or SHA40_RE.fullmatch(patch["base_commit_sha"]) is None
+            or any(
+                not isinstance(patch.get(field), str)
+                or SHA256_RE.fullmatch(patch[field]) is None
+                for field in ("content_sha256", "patch_sha256")
+            )
             or not isinstance(patch.get("issue"), str)
             or re.fullmatch(
                 re.escape(fork_base) + r"/issues/[1-9][0-9]*",
@@ -379,6 +385,35 @@ def validate_manifest(
     return True, reviewed, controls, downstream_patches
 
 
+def selected_file_content_digest(
+    repo: Path, commit: str, files: list[str]
+) -> str:
+    digest = hashlib.sha256()
+    digest.update(SELECTED_CONTENT_DOMAIN)
+    for path in files:
+        path_data = path.encode("utf-8")
+        digest.update(len(path_data).to_bytes(8, "big"))
+        digest.update(path_data)
+        entry = run_command(repo, ["git", "ls-tree", "-z", commit, "--", path])
+        if not entry:
+            digest.update(b"D")
+            continue
+        entries = entry.rstrip(b"\0").split(b"\0")
+        if len(entries) != 1:
+            raise ValueError
+        metadata, entry_path = entries[0].split(b"\t", 1)
+        mode, kind, object_id = metadata.split(b" ", 2)
+        if entry_path != path_data or kind != b"blob":
+            raise ValueError
+        content = run_command(repo, ["git", "cat-file", "blob", object_id.decode("ascii")])
+        digest.update(b"F")
+        digest.update(len(mode).to_bytes(8, "big"))
+        digest.update(mode)
+        digest.update(len(content).to_bytes(8, "big"))
+        digest.update(content)
+    return digest.hexdigest()
+
+
 def verify_downstream_patches(
     repo: Path,
     source_sha: str,
@@ -386,73 +421,189 @@ def verify_downstream_patches(
     manifest_path: str,
     violations: set[tuple[str, str, str]],
 ) -> None:
+    previous_candidate: str | None = None
+    source_expectations: dict[str, str] = {}
     for patch in patches:
-        commit = patch["head_commit_sha"]
+        base = patch["base_commit_sha"]
         files = sorted(patch["files"])
-        try:
-            run_command(repo, ["git", "cat-file", "-e", commit + "^{commit}"])
-        except CommandFailure:
+        if manifest_path in files:
             add_violation(
                 violations,
                 manifest_path,
                 "provenance",
-                "downstream_patch_commit_unavailable",
+                "downstream_patch_manifest_self_reference",
             )
             continue
         try:
-            run_command(repo, ["git", "merge-base", "--is-ancestor", commit, source_sha])
+            run_command(repo, ["git", "cat-file", "-e", base + "^{commit}"])
         except CommandFailure:
             add_violation(
                 violations,
                 manifest_path,
                 "provenance",
-                "downstream_patch_not_ancestor",
+                "downstream_patch_base_unavailable",
             )
+            continue
         try:
-            changed_data = run_command(
+            run_command(repo, ["git", "merge-base", "--is-ancestor", base, source_sha])
+        except CommandFailure:
+            add_violation(
+                violations,
+                manifest_path,
+                "provenance",
+                "downstream_patch_base_not_ancestor",
+            )
+            continue
+        try:
+            candidate_data = run_command(
                 repo,
-                ["git", "diff-tree", "--no-commit-id", "--name-only", "-r", "-z", commit],
+                ["git", "rev-list", "--reverse", "--ancestry-path", f"{base}..{source_sha}"],
             )
-            changed = sorted(
-                path
-                for path in changed_data.decode("utf-8").split("\0")
-                if path
-            )
-        except (CommandFailure, UnicodeError):
+            candidates = candidate_data.decode("ascii").splitlines()
+            if not candidates or any(SHA40_RE.fullmatch(value) is None for value in candidates):
+                raise ValueError
+        except (CommandFailure, UnicodeError, ValueError):
             add_violation(
                 violations,
                 manifest_path,
                 "provenance",
-                "downstream_patch_files_unavailable",
+                "downstream_patch_candidates_unavailable",
             )
             continue
-        if changed != files:
-            add_violation(
-                violations,
-                manifest_path,
-                "provenance",
-                "downstream_patch_files_mismatch",
-            )
+
+        matched_candidate: str | None = None
+        saw_files = False
+        saw_patch = False
+        files_unavailable = False
+        patch_unavailable = False
+        content_unavailable = False
+        for candidate in candidates:
+            if previous_candidate is not None:
+                try:
+                    run_command(
+                        repo,
+                        [
+                            "git",
+                            "merge-base",
+                            "--is-ancestor",
+                            previous_candidate,
+                            candidate,
+                        ],
+                    )
+                except CommandFailure:
+                    continue
+            try:
+                changed_data = run_command(
+                    repo,
+                    [
+                        "git",
+                        "diff",
+                        "--name-only",
+                        "-z",
+                        "--no-renames",
+                        base,
+                        candidate,
+                        "--",
+                    ],
+                )
+                changed = sorted(
+                    path
+                    for path in changed_data.decode("utf-8").split("\0")
+                    if path and path != manifest_path
+                )
+            except (CommandFailure, UnicodeError):
+                files_unavailable = True
+                continue
+            if changed != files:
+                continue
+            saw_files = True
+            try:
+                patch_data = run_command(
+                    repo,
+                    [
+                        "git",
+                        "diff",
+                        "--no-ext-diff",
+                        "--no-textconv",
+                        "--no-color",
+                        "--binary",
+                        "--full-index",
+                        "--no-renames",
+                        "--src-prefix=a/",
+                        "--dst-prefix=b/",
+                        base,
+                        candidate,
+                        "--",
+                        *files,
+                    ],
+                )
+            except CommandFailure:
+                patch_unavailable = True
+                continue
+            if sha256(patch_data) != patch["patch_sha256"]:
+                continue
+            saw_patch = True
+            try:
+                content_digest = selected_file_content_digest(repo, candidate, files)
+            except (CommandFailure, UnicodeError, ValueError):
+                content_unavailable = True
+                continue
+            if content_digest != patch["content_sha256"]:
+                continue
+            matched_candidate = candidate
+            break
+        if matched_candidate is not None:
+            previous_candidate = matched_candidate
+            try:
+                for path in files:
+                    source_expectations[path] = selected_file_content_digest(
+                        repo, matched_candidate, [path]
+                    )
+            except (CommandFailure, UnicodeError, ValueError):
+                add_violation(
+                    violations,
+                    manifest_path,
+                    "provenance",
+                    "downstream_patch_content_unavailable",
+                )
             continue
+        if not saw_files:
+            reason = (
+                "downstream_patch_files_unavailable"
+                if files_unavailable
+                else "downstream_patch_files_mismatch"
+            )
+        elif not saw_patch:
+            reason = (
+                "downstream_patch_unavailable"
+                if patch_unavailable
+                else "downstream_patch_digest_mismatch"
+            )
+        else:
+            reason = (
+                "downstream_patch_content_unavailable"
+                if content_unavailable
+                else "downstream_patch_content_digest_mismatch"
+            )
+        add_violation(violations, manifest_path, "provenance", reason)
+
+    for path, expected in sorted(source_expectations.items()):
         try:
-            patch_data = run_command(
-                repo,
-                ["git", "show", "--format=", "--no-ext-diff", "--binary", commit, "--", *files],
-            )
-        except CommandFailure:
+            current = selected_file_content_digest(repo, source_sha, [path])
+        except (CommandFailure, UnicodeError, ValueError):
             add_violation(
                 violations,
                 manifest_path,
                 "provenance",
-                "downstream_patch_unavailable",
+                "downstream_patch_source_content_unavailable",
             )
             continue
-        if sha256(patch_data) != patch["patch_sha256"]:
+        if current != expected:
             add_violation(
                 violations,
                 manifest_path,
                 "provenance",
-                "downstream_patch_digest_mismatch",
+                "downstream_patch_source_content_mismatch",
             )
 
 

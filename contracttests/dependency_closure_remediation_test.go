@@ -3,6 +3,7 @@ package contracttests
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -72,6 +73,42 @@ func TestDependencyClosureBindsDownstreamPatchContent(t *testing.T) {
 		root := writeClosureFixtureWithDownstreamPatch(t)
 		assertFixtureResult(t, root, runFixtureVerifier(t, verifier, root), closureCase{wantPass: true})
 	})
+	t.Run("post squash", func(t *testing.T) {
+		root := writeClosureFixtureWithDownstreamPatch(t)
+		squashFixtureDownstreamPatch(t, root)
+		assertFixtureResult(t, root, runFixtureVerifier(t, verifier, root), closureCase{wantPass: true})
+	})
+	t.Run("post attestation mutation", func(t *testing.T) {
+		root := writeClosureFixtureWithDownstreamPatch(t)
+		path := filepath.Join(root, "release", "nested.json")
+		if err := os.WriteFile(path, []byte("{\"patched\":\"again\"}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		runFixtureGit(t, root, "add", "release/nested.json")
+		runFixtureGit(t, root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "mutate attested content")
+		assertFixtureResult(t, root, runFixtureVerifier(t, verifier, root), closureCase{
+			wantPath:   "provenance/closure-manifest.json",
+			wantClass:  "provenance",
+			wantReason: "downstream_patch_source_content_mismatch",
+		})
+	})
+	t.Run("forged non-ancestor base", func(t *testing.T) {
+		root := writeClosureFixtureWithDownstreamPatch(t)
+		source := strings.TrimSpace(runFixtureGitOutput(t, root, "rev-parse", "HEAD"))
+		base := strings.TrimSpace(runFixtureGitOutput(t, root, "rev-parse", "HEAD~2"))
+		runFixtureGit(t, root, "checkout", "-q", "--detach", base)
+		runFixtureGit(t, root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgSign=false", "commit", "-q", "--allow-empty", "-m", "sibling base")
+		forgedBase := strings.TrimSpace(runFixtureGitOutput(t, root, "rev-parse", "HEAD"))
+		runFixtureGit(t, root, "checkout", "-q", "--detach", source)
+		mutateFixtureDownstreamPatch(t, root, func(patch map[string]any) {
+			patch["base_commit_sha"] = forgedBase
+		})
+		assertFixtureResult(t, root, runFixtureVerifier(t, verifier, root), closureCase{
+			wantPath:   "provenance/closure-manifest.json",
+			wantClass:  "provenance",
+			wantReason: "downstream_patch_base_not_ancestor",
+		})
+	})
 	tests := []struct {
 		name   string
 		mutate func(map[string]any)
@@ -85,18 +122,32 @@ func TestDependencyClosureBindsDownstreamPatchContent(t *testing.T) {
 			reason: "downstream_patch_digest_mismatch",
 		},
 		{
-			name: "missing commit",
+			name: "forged base",
 			mutate: func(patch map[string]any) {
-				patch["head_commit_sha"] = strings.Repeat("0", 40)
+				patch["base_commit_sha"] = strings.Repeat("0", 40)
 			},
-			reason: "downstream_patch_commit_unavailable",
+			reason: "downstream_patch_base_unavailable",
 		},
 		{
-			name: "mismatched files",
+			name: "forged content digest",
+			mutate: func(patch map[string]any) {
+				patch["content_sha256"] = strings.Repeat("0", 64)
+			},
+			reason: "downstream_patch_content_digest_mismatch",
+		},
+		{
+			name: "forged files",
 			mutate: func(patch map[string]any) {
 				patch["files"] = []any{"main.go"}
 			},
 			reason: "downstream_patch_files_mismatch",
+		},
+		{
+			name: "manifest self reference",
+			mutate: func(patch map[string]any) {
+				patch["files"] = []any{"provenance/closure-manifest.json"}
+			},
+			reason: "downstream_patch_manifest_self_reference",
 		},
 	}
 	for _, test := range tests {
@@ -129,6 +180,7 @@ func TestDependencyClosureRejectsContentNotAtHead(t *testing.T) {
 func writeClosureFixtureWithDownstreamPatch(t *testing.T) string {
 	t.Helper()
 	root := writeClosureFixture(t, nil)
+	base := strings.TrimSpace(runFixtureGitOutput(t, root, "rev-parse", "HEAD"))
 	path := filepath.Join(root, "release", "nested.json")
 	if err := os.WriteFile(path, []byte("{\"patched\":true}\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -136,17 +188,94 @@ func writeClosureFixtureWithDownstreamPatch(t *testing.T) string {
 	runFixtureGit(t, root, "add", "release/nested.json")
 	runFixtureGit(t, root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "downstream patch")
 	commit := strings.TrimSpace(runFixtureGitOutput(t, root, "rev-parse", "HEAD"))
-	patch := runFixtureGitOutput(t, root, "show", "--format=", "--no-ext-diff", "--binary", commit, "--", "release/nested.json")
+	files := []string{"release/nested.json"}
+	patch := runFixtureGitOutput(
+		t,
+		root,
+		"diff",
+		"--no-ext-diff",
+		"--no-textconv",
+		"--no-color",
+		"--binary",
+		"--full-index",
+		"--no-renames",
+		"--src-prefix=a/",
+		"--dst-prefix=b/",
+		base,
+		commit,
+		"--",
+		files[0],
+	)
 	digest := sha256.Sum256([]byte(patch))
 
 	mutateFixtureDownstreamPatch(t, root, func(record map[string]any) {
-		record["files"] = []any{"release/nested.json"}
-		record["head_commit_sha"] = commit
+		record["base_commit_sha"] = base
+		record["content_sha256"] = fixtureSelectedFileContentDigest(t, root, commit, files)
+		record["files"] = []any{files[0]}
 		record["issue"] = "https://github.com/Project-Helianthus/dependency-closure-fixture/issues/1"
 		record["patch_sha256"] = fmt.Sprintf("%x", digest)
 		record["pull_request"] = "https://github.com/Project-Helianthus/dependency-closure-fixture/pull/2"
 	})
 	return root
+}
+
+func squashFixtureDownstreamPatch(t *testing.T, root string) {
+	t.Helper()
+	manifestPath := filepath.Join(root, "provenance", "closure-manifest.json")
+	manifest := readFile(t, manifestPath)
+	var value struct {
+		DownstreamPatches []struct {
+			Base string `json:"base_commit_sha"`
+		} `json:"downstream_patches"`
+	}
+	if err := json.Unmarshal(manifest, &value); err != nil {
+		t.Fatal(err)
+	}
+	if len(value.DownstreamPatches) != 1 {
+		t.Fatalf("fixture downstream patches = %d; want one", len(value.DownstreamPatches))
+	}
+	runFixtureGit(t, root, "checkout", "-q", "--detach", value.DownstreamPatches[0].Base)
+	if err := os.WriteFile(filepath.Join(root, "release", "nested.json"), []byte("{\"patched\":true}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifestPath, manifest, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runFixtureGit(t, root, "add", "release/nested.json", "provenance/closure-manifest.json")
+	runFixtureGit(t, root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "squashed downstream contribution")
+}
+
+func fixtureSelectedFileContentDigest(t *testing.T, root, commit string, files []string) string {
+	t.Helper()
+	digest := sha256.New()
+	_, _ = digest.Write([]byte("helianthus.selected-file-content.v1\x00"))
+	for _, path := range files {
+		writeFixtureDigestSize(digest, len(path))
+		_, _ = digest.Write([]byte(path))
+		entry := strings.TrimSuffix(runFixtureGitOutput(t, root, "ls-tree", "-z", commit, "--", path), "\x00")
+		if entry == "" {
+			_, _ = digest.Write([]byte("D"))
+			continue
+		}
+		metadataAndPath := strings.SplitN(entry, "\t", 2)
+		metadata := strings.Fields(metadataAndPath[0])
+		if len(metadataAndPath) != 2 || metadataAndPath[1] != path || len(metadata) != 3 || metadata[1] != "blob" {
+			t.Fatalf("unexpected ls-tree entry for %s: %q", path, entry)
+		}
+		content := runFixtureGitOutput(t, root, "cat-file", "blob", metadata[2])
+		_, _ = digest.Write([]byte("F"))
+		writeFixtureDigestSize(digest, len(metadata[0]))
+		_, _ = digest.Write([]byte(metadata[0]))
+		writeFixtureDigestSize(digest, len(content))
+		_, _ = digest.Write([]byte(content))
+	}
+	return fmt.Sprintf("%x", digest.Sum(nil))
+}
+
+func writeFixtureDigestSize(digest interface{ Write([]byte) (int, error) }, size int) {
+	var encoded [8]byte
+	binary.BigEndian.PutUint64(encoded[:], uint64(size))
+	_, _ = digest.Write(encoded[:])
 }
 
 func mutateFixtureDownstreamPatch(t *testing.T, root string, mutate func(map[string]any)) {

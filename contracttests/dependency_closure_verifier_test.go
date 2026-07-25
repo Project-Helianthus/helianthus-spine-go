@@ -324,7 +324,7 @@ require (
       "upstream_pr": "https://example.invalid/upstream/pull/2"
     }
   ],
-  "schema": "helianthus.provenance.closure-manifest.v1",
+  "schema": "helianthus.provenance.closure-manifest.v2",
   "source_header_inventory": {"globs": ["**/*.go"], "headers": []},
   "upstream": {
     "peeled_commit_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

@@ -11,13 +11,20 @@ var Events events
 type eventHandlerItem struct {
 	Level   api.EventHandlerLevel
 	Handler api.EventHandlerInterface
+
+	owner      *events
+	subscribed bool
+	captures   int
+	dispatchMu sync.Mutex
+	pending    []api.EventPayload
+	running    bool
 }
 
 type events struct {
 	mu       sync.Mutex
 	muHandle sync.Mutex
 
-	handlers []eventHandlerItem // event handling outside of the core stack
+	handlers []*eventHandlerItem // event handling outside of the core stack
 }
 
 // will be used in EEBUS core directly to access the level EventHandlerLevelCore
@@ -27,13 +34,16 @@ func (r *events) subscribe(level api.EventHandlerLevel, handler api.EventHandler
 
 	for _, item := range r.handlers {
 		if item.Level == level && item.Handler == handler {
+			item.subscribed = true
 			return nil
 		}
 	}
 
-	newHandlerItem := eventHandlerItem{
-		Level:   level,
-		Handler: handler,
+	newHandlerItem := &eventHandlerItem{
+		Level:      level,
+		Handler:    handler,
+		owner:      r,
+		subscribed: true,
 	}
 	r.handlers = append(r.handlers, newHandlerItem)
 
@@ -54,14 +64,13 @@ func (r *events) unsubscribe(level api.EventHandlerLevel, handler api.EventHandl
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	var newHandlers []eventHandlerItem
 	for _, item := range r.handlers {
-		if item.Level != level || item.Handler != handler {
-			newHandlers = append(newHandlers, item)
+		if item.Level == level && item.Handler == handler {
+			item.subscribed = false
+			r.retireLocked(item)
+			break
 		}
 	}
-
-	r.handlers = newHandlers
 
 	return nil
 }
@@ -74,8 +83,13 @@ func (r *events) Unsubscribe(handler api.EventHandlerInterface) error {
 // Publish an event to all subscribers
 func (r *events) Publish(payload api.EventPayload) {
 	r.mu.Lock()
-	handler := make([]eventHandlerItem, len(r.handlers))
-	copy(handler, r.handlers)
+	handler := make([]*eventHandlerItem, 0, len(r.handlers))
+	for _, item := range r.handlers {
+		if item.subscribed {
+			item.captures++
+			handler = append(handler, item)
+		}
+	}
 	r.mu.Unlock()
 
 	// Use different locks, so unpublish is possible in the event handlers
@@ -97,9 +111,74 @@ func (r *events) Publish(payload api.EventPayload) {
 				// and expected actions are taken
 				item.Handler.HandleEvent(payload)
 			} else {
-				go item.Handler.HandleEvent(payload)
+				item.dispatch(payload)
 			}
+			r.releaseCapture(item)
 		}
 	}
 	r.muHandle.Unlock()
+}
+
+func (item *eventHandlerItem) dispatch(payload api.EventPayload) {
+	item.dispatchMu.Lock()
+	item.pending = append(item.pending, payload)
+	if item.running {
+		item.dispatchMu.Unlock()
+		return
+	}
+	item.running = true
+	item.dispatchMu.Unlock()
+
+	go item.run()
+}
+
+func (item *eventHandlerItem) run() {
+	for {
+		item.dispatchMu.Lock()
+		if len(item.pending) == 0 {
+			item.running = false
+			item.dispatchMu.Unlock()
+			item.owner.retire(item)
+			return
+		}
+		payload := item.pending[0]
+		item.pending[0] = api.EventPayload{}
+		item.pending = item.pending[1:]
+		item.dispatchMu.Unlock()
+
+		item.Handler.HandleEvent(payload)
+	}
+}
+
+func (r *events) releaseCapture(item *eventHandlerItem) {
+	r.mu.Lock()
+	item.captures--
+	r.retireLocked(item)
+	r.mu.Unlock()
+}
+
+func (r *events) retire(item *eventHandlerItem) {
+	r.mu.Lock()
+	r.retireLocked(item)
+	r.mu.Unlock()
+}
+
+func (r *events) retireLocked(item *eventHandlerItem) {
+	if item.subscribed || item.captures != 0 {
+		return
+	}
+	item.dispatchMu.Lock()
+	idle := !item.running && len(item.pending) == 0
+	item.dispatchMu.Unlock()
+	if !idle {
+		return
+	}
+	for index, candidate := range r.handlers {
+		if candidate == item {
+			copy(r.handlers[index:], r.handlers[index+1:])
+			r.handlers[len(r.handlers)-1] = nil
+			r.handlers = r.handlers[:len(r.handlers)-1]
+			return
+		}
+	}
 }
