@@ -26,7 +26,7 @@ const (
 	upstreamSpine   = "github.com/enbility/spine-go"
 	upstreamShip    = "github.com/enbility/ship-go"
 	upstreamEEBus   = "github.com/enbility/eebus-go"
-	productionHash  = "5043cb466ee01f0a0d91db54a835759233acea37d163d760c33233b0b3571cf0"
+	productionHash  = "cce059b44e877ebc021fb3e52bcf16cf5f992efaf024516c0aac1676b872a12f"
 )
 
 func TestModuleDependencyClosure(t *testing.T) {
@@ -142,6 +142,13 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 				SHA256 string `json:"sha256"`
 			} `json:"provenance_manifest"`
 		} `json:"reviewed_dependencies"`
+		ReviewedPatches []struct {
+			Files       []string `json:"files"`
+			HeadCommit  string   `json:"head_commit_sha"`
+			MergeCommit string   `json:"merge_commit_sha"`
+			Issue       string   `json:"upstream_issue"`
+			PullRequest string   `json:"upstream_pr"`
+		} `json:"reviewed_patches"`
 		DependencyControlInputs []string `json:"dependency_control_inputs"`
 	}
 	data := readFile(t, path)
@@ -153,7 +160,7 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 		{"module", manifest.Module, canonicalModule},
 		{"fork.origin", manifest.Fork.Origin, "https://github.com/Project-Helianthus/helianthus-spine-go.git"},
 		{"fork.lifecycle", manifest.Fork.Lifecycle, "temporary_downstream_patch_carrier"},
-		{"fork.intended_prerelease", manifest.Fork.IntendedPrerelease, "v0.7.1-helianthus.1"},
+		{"fork.intended_prerelease", manifest.Fork.IntendedPrerelease, "v0.7.1-helianthus.2"},
 		{"upstream.remote", manifest.Upstream.Remote, "https://github.com/enbility/spine-go.git"},
 		{"upstream.tag", manifest.Upstream.Tag, "v0.7.0"},
 		{"upstream.tag_object_sha", manifest.Upstream.TagObject, "30aeb9ac51c3212d280acd93a9afaf58bc63bd92"},
@@ -172,6 +179,24 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 	}
 	if len(manifest.ReviewedDependencies) != 1 {
 		t.Fatalf("manifest reviewed_dependencies = %d; want exactly canonical SHIP", len(manifest.ReviewedDependencies))
+	}
+	if len(manifest.ReviewedPatches) != 1 {
+		t.Fatalf("manifest reviewed_patches = %d; want exactly one upstream race fix", len(manifest.ReviewedPatches))
+	}
+	patch := manifest.ReviewedPatches[0]
+	patchWants := []struct{ name, got, want string }{
+		{"patch.head_commit_sha", patch.HeadCommit, "8cfa9c8d49ba8f989ef889326249cb48797cd68a"},
+		{"patch.merge_commit_sha", patch.MergeCommit, "f5aacd95d389c04f2455c121ed2e74ac95f19712"},
+		{"patch.upstream_issue", patch.Issue, "https://github.com/enbility/spine-go/issues/38"},
+		{"patch.upstream_pr", patch.PullRequest, "https://github.com/enbility/spine-go/pull/39"},
+	}
+	for _, check := range patchWants {
+		if check.got != check.want {
+			t.Errorf("manifest %s = %q; want %q", check.name, check.got, check.want)
+		}
+	}
+	if len(patch.Files) != 1 || patch.Files[0] != "spine/events.go" {
+		t.Errorf("manifest patch files = %v; want [spine/events.go]", patch.Files)
 	}
 	ship := manifest.ReviewedDependencies[0]
 	dependencyWants := []struct{ name, got, want string }{
@@ -271,7 +296,7 @@ func TestProductionSourcesMatchUpstreamApartFromImportIdentity(t *testing.T) {
 	}
 	got := hex.EncodeToString(h.Sum(nil))
 	if got != productionHash {
-		t.Errorf("normalized production source digest = %s; want upstream v0.7.0 digest %s; only canonical import identity changes are allowed", got, productionHash)
+		t.Errorf("normalized production source digest = %s; want reviewed upstream v0.7.0 plus patch digest %s", got, productionHash)
 	}
 }
 func repositoryRoot(t *testing.T) string {

@@ -63,6 +63,7 @@ MANIFEST_KEYS = {
     "module",
     "notice_inventory",
     "reviewed_dependencies",
+    "reviewed_patches",
     "schema",
     "source_header_inventory",
     "upstream",
@@ -217,7 +218,10 @@ def valid_digest_record(value: Any, *, with_path: bool) -> bool:
 
 
 def validate_manifest(value: Any) -> tuple[bool, dict[str, str], list[str]]:
-    if not isinstance(value, dict) or set(value) != MANIFEST_KEYS:
+    if (
+        not isinstance(value, dict)
+        or set(value) not in (MANIFEST_KEYS, MANIFEST_KEYS - {"reviewed_patches"})
+    ):
         return False, {}, []
     if value.get("schema") != MANIFEST_SCHEMA or not isinstance(value.get("module"), str):
         return False, {}, []
@@ -296,6 +300,35 @@ def validate_manifest(value: Any) -> tuple[bool, dict[str, str], list[str]]:
         ):
             return False, {}, []
         reviewed[module] = version
+
+    patches = value.get("reviewed_patches", [])
+    patch_keys = {
+        "files",
+        "head_commit_sha",
+        "merge_commit_sha",
+        "upstream_issue",
+        "upstream_pr",
+    }
+    if not isinstance(patches, list):
+        return False, {}, []
+    for patch in patches:
+        if (
+            not isinstance(patch, dict)
+            or set(patch) != patch_keys
+            or not is_string_list(patch.get("files"))
+            or any(normalize_repo_path(path) is None for path in patch["files"])
+            or not all(
+                isinstance(patch.get(field), str)
+                and SHA40_RE.fullmatch(patch[field])
+                for field in ("head_commit_sha", "merge_commit_sha")
+            )
+            or not all(
+                isinstance(patch.get(field), str)
+                and patch[field].startswith("https://github.com/enbility/spine-go/")
+                for field in ("upstream_issue", "upstream_pr")
+            )
+        ):
+            return False, {}, []
     return True, reviewed, controls
 
 
