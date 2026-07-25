@@ -28,7 +28,8 @@ type DeviceLocal struct {
 	deviceCode   string
 	serialNumber string
 
-	mux sync.Mutex
+	mux                sync.Mutex
+	remoteLifecycleMux sync.Mutex
 }
 
 // BrandName is the brand
@@ -108,10 +109,13 @@ var _ api.DeviceLocalInterface = (*DeviceLocal)(nil)
 
 // Setup a new remote device with a given SKI and triggers SPINE requesting device details
 func (r *DeviceLocal) SetupRemoteDevice(ski string, writeI shipapi.ShipConnectionDataWriterInterface) shipapi.ShipConnectionDataReaderInterface {
+	r.remoteLifecycleMux.Lock()
+	defer r.remoteLifecycleMux.Unlock()
+
 	sender := NewSender(writeI)
 	rDevice := NewDeviceRemote(r, ski, sender)
 
-	r.AddRemoteDeviceForSki(ski, rDevice)
+	r.addRemoteDeviceForSki(ski, rDevice)
 
 	// always add subscription, as it checks if it already exists
 	_ = Events.subscribe(api.EventHandlerLevelCore, r)
@@ -132,6 +136,12 @@ func (r *DeviceLocal) RequestRemoteDetailedDiscoveryData(rDevice api.DeviceRemot
 
 // Helper method used by tests and AddRemoteDevice
 func (r *DeviceLocal) AddRemoteDeviceForSki(ski string, rDevice api.DeviceRemoteInterface) {
+	r.remoteLifecycleMux.Lock()
+	defer r.remoteLifecycleMux.Unlock()
+	r.addRemoteDeviceForSki(ski, rDevice)
+}
+
+func (r *DeviceLocal) addRemoteDeviceForSki(ski string, rDevice api.DeviceRemoteInterface) {
 	r.mux.Lock()
 	defer r.mux.Unlock()
 
@@ -139,9 +149,9 @@ func (r *DeviceLocal) AddRemoteDeviceForSki(ski string, rDevice api.DeviceRemote
 }
 
 func (r *DeviceLocal) RemoveRemoteDeviceConnection(ski string) {
-	remoteDevice := r.RemoteDeviceForSki(ski)
-
-	r.RemoveRemoteDevice(ski)
+	r.remoteLifecycleMux.Lock()
+	defer r.remoteLifecycleMux.Unlock()
+	remoteDevice := r.removeRemoteDevice(ski)
 
 	// inform about the disconnection
 	payload := api.EventPayload{
@@ -154,25 +164,33 @@ func (r *DeviceLocal) RemoveRemoteDeviceConnection(ski string) {
 }
 
 func (r *DeviceLocal) RemoveRemoteDevice(ski string) {
+	r.remoteLifecycleMux.Lock()
+	defer r.remoteLifecycleMux.Unlock()
+	r.removeRemoteDevice(ski)
+}
+
+func (r *DeviceLocal) removeRemoteDevice(ski string) api.DeviceRemoteInterface {
 	remoteDevice := r.RemoteDeviceForSki(ski)
 	if remoteDevice == nil {
-		return
+		return nil
 	}
 
 	// remove all subscriptions for this device
 	subscriptionMgr := r.SubscriptionManager()
-	subscriptionMgr.RemoveSubscriptionsForDevice(r.remoteDevices[ski])
+	subscriptionMgr.RemoveSubscriptionsForDevice(remoteDevice)
 
 	// remove all bindings for this device
 	bindingMgr := r.BindingManager()
-	bindingMgr.RemoveBindingsForDevice(r.remoteDevices[ski])
+	bindingMgr.RemoveBindingsForDevice(remoteDevice)
 
+	r.mux.Lock()
 	delete(r.remoteDevices, ski)
 
 	// only unsubscribe if we don't have any remote devices left
 	if len(r.remoteDevices) == 0 {
 		_ = Events.unsubscribe(api.EventHandlerLevelCore, r)
 	}
+	r.mux.Unlock()
 
 	remoteDeviceAddress := &model.DeviceAddressType{
 		Device: remoteDevice.Address(),
@@ -184,6 +202,7 @@ func (r *DeviceLocal) RemoveRemoteDevice(ski string) {
 			feature.CleanRemoteDeviceCaches(remoteDeviceAddress)
 		}
 	}
+	return remoteDevice
 }
 
 func (r *DeviceLocal) RemoteDevices() []api.DeviceRemoteInterface {

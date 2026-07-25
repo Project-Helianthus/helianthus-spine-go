@@ -2,6 +2,9 @@ package contracttests
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -63,6 +66,52 @@ func TestDependencyClosureManifestSchemaFailsClosed(t *testing.T) {
 	}
 }
 
+func TestDependencyClosureBindsDownstreamPatchContent(t *testing.T) {
+	verifier := filepath.Join(repositoryRoot(t), "scripts", "verify_dependency_closure.py")
+	t.Run("valid patch", func(t *testing.T) {
+		root := writeClosureFixtureWithDownstreamPatch(t)
+		assertFixtureResult(t, root, runFixtureVerifier(t, verifier, root), closureCase{wantPass: true})
+	})
+	tests := []struct {
+		name   string
+		mutate func(map[string]any)
+		reason string
+	}{
+		{
+			name: "forged digest",
+			mutate: func(patch map[string]any) {
+				patch["patch_sha256"] = strings.Repeat("0", 64)
+			},
+			reason: "downstream_patch_digest_mismatch",
+		},
+		{
+			name: "missing commit",
+			mutate: func(patch map[string]any) {
+				patch["head_commit_sha"] = strings.Repeat("0", 40)
+			},
+			reason: "downstream_patch_commit_unavailable",
+		},
+		{
+			name: "mismatched files",
+			mutate: func(patch map[string]any) {
+				patch["files"] = []any{"main.go"}
+			},
+			reason: "downstream_patch_files_mismatch",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := writeClosureFixtureWithDownstreamPatch(t)
+			mutateFixtureDownstreamPatch(t, root, test.mutate)
+			assertFixtureResult(t, root, runFixtureVerifier(t, verifier, root), closureCase{
+				wantPath:   "provenance/closure-manifest.json",
+				wantClass:  "provenance",
+				wantReason: test.reason,
+			})
+		})
+	}
+}
+
 func TestDependencyClosureRejectsContentNotAtHead(t *testing.T) {
 	verifier := filepath.Join(repositoryRoot(t), "scripts", "verify_dependency_closure.py")
 	root := writeClosureFixture(t, nil)
@@ -75,6 +124,73 @@ func TestDependencyClosureRejectsContentNotAtHead(t *testing.T) {
 		t.Fatalf("dirty tracked content was not rejected: err=%v stderr=%q", result.err, result.stderr)
 	}
 	decodeCanonicalEvidence(t, result.evidence)
+}
+
+func writeClosureFixtureWithDownstreamPatch(t *testing.T) string {
+	t.Helper()
+	root := writeClosureFixture(t, nil)
+	path := filepath.Join(root, "release", "nested.json")
+	if err := os.WriteFile(path, []byte("{\"patched\":true}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runFixtureGit(t, root, "add", "release/nested.json")
+	runFixtureGit(t, root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "downstream patch")
+	commit := strings.TrimSpace(runFixtureGitOutput(t, root, "rev-parse", "HEAD"))
+	patch := runFixtureGitOutput(t, root, "show", "--format=", "--no-ext-diff", "--binary", commit, "--", "release/nested.json")
+	digest := sha256.Sum256([]byte(patch))
+
+	mutateFixtureDownstreamPatch(t, root, func(record map[string]any) {
+		record["files"] = []any{"release/nested.json"}
+		record["head_commit_sha"] = commit
+		record["issue"] = "https://github.com/Project-Helianthus/dependency-closure-fixture/issues/1"
+		record["patch_sha256"] = fmt.Sprintf("%x", digest)
+		record["pull_request"] = "https://github.com/Project-Helianthus/dependency-closure-fixture/pull/2"
+	})
+	return root
+}
+
+func mutateFixtureDownstreamPatch(t *testing.T, root string, mutate func(map[string]any)) {
+	t.Helper()
+	path := filepath.Join(root, "provenance", "closure-manifest.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	patches, _ := manifest["downstream_patches"].([]any)
+	var patch map[string]any
+	if len(patches) == 0 {
+		patch = make(map[string]any)
+		patches = append(patches, patch)
+		manifest["downstream_patches"] = patches
+	} else {
+		patch, _ = patches[0].(map[string]any)
+	}
+	mutate(patch)
+	encoded, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded = append(encoded, '\n')
+	if err := os.WriteFile(path, encoded, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runFixtureGit(t, root, "add", "provenance/closure-manifest.json")
+	runFixtureGit(t, root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "bind downstream patch")
+}
+
+func runFixtureGitOutput(t *testing.T, root string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = root
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %s: %v", strings.Join(args, " "), err)
+	}
+	return string(output)
 }
 
 func TestDependencyClosureRejectsNonportableTrackedNames(t *testing.T) {

@@ -58,6 +58,7 @@ CONFIG_NAMES = {
 }
 MANIFEST_KEYS = {
     "dependency_control_inputs",
+    "downstream_patches",
     "fork",
     "license",
     "module",
@@ -217,11 +218,13 @@ def valid_digest_record(value: Any, *, with_path: bool) -> bool:
     return isinstance(value.get("sha256"), str) and SHA256_RE.fullmatch(value["sha256"]) is not None
 
 
-def validate_manifest(value: Any) -> tuple[bool, dict[str, str], list[str]]:
+def validate_manifest(
+    value: Any,
+) -> tuple[bool, dict[str, str], list[str], list[dict[str, Any]]]:
     if not isinstance(value, dict) or set(value) != MANIFEST_KEYS:
-        return False, {}, []
+        return False, {}, [], []
     if value.get("schema") != MANIFEST_SCHEMA or not isinstance(value.get("module"), str):
-        return False, {}, []
+        return False, {}, [], []
 
     fork = value.get("fork")
     if (
@@ -231,7 +234,7 @@ def validate_manifest(value: Any) -> tuple[bool, dict[str, str], list[str]]:
         or not isinstance(fork.get("origin"), str)
         or not isinstance(fork.get("intended_prerelease"), str)
     ):
-        return False, {}, []
+        return False, {}, [], []
 
     upstream = value.get("upstream")
     if not isinstance(upstream, dict) or set(upstream) != {
@@ -241,17 +244,17 @@ def validate_manifest(value: Any) -> tuple[bool, dict[str, str], list[str]]:
         "tag_object_sha",
         "tree_sha",
     }:
-        return False, {}, []
+        return False, {}, [], []
     if not all(
         isinstance(upstream.get(field), str) and SHA40_RE.fullmatch(upstream[field])
         for field in ("peeled_commit_sha", "tag_object_sha", "tree_sha")
     ) or not all(isinstance(upstream.get(field), str) for field in ("remote", "tag")):
-        return False, {}, []
+        return False, {}, [], []
 
     if not valid_digest_record(value.get("license"), with_path=True):
-        return False, {}, []
+        return False, {}, [], []
     if not is_string_list(value.get("notice_inventory")):
-        return False, {}, []
+        return False, {}, [], []
     source_headers = value.get("source_header_inventory")
     if (
         not isinstance(source_headers, dict)
@@ -259,11 +262,11 @@ def validate_manifest(value: Any) -> tuple[bool, dict[str, str], list[str]]:
         or not is_string_list(source_headers.get("globs"))
         or not is_string_list(source_headers.get("headers"))
     ):
-        return False, {}, []
+        return False, {}, [], []
 
     controls = value.get("dependency_control_inputs")
     if not is_string_list(controls) or any(normalize_repo_path(path) is None for path in controls):
-        return False, {}, []
+        return False, {}, [], []
 
     reviewed: dict[str, str] = {}
     dependencies = value.get("reviewed_dependencies")
@@ -280,7 +283,7 @@ def validate_manifest(value: Any) -> tuple[bool, dict[str, str], list[str]]:
     }
     for dependency in dependencies:
         if not isinstance(dependency, dict) or set(dependency) != dependency_keys:
-            return False, {}, []
+            return False, {}, [], []
         module = dependency.get("module")
         version = dependency.get("version")
         if (
@@ -307,7 +310,7 @@ def validate_manifest(value: Any) -> tuple[bool, dict[str, str], list[str]]:
         "upstream_pr",
     }
     if not isinstance(patches, list) or not patches:
-        return False, {}, []
+        return False, {}, [], []
     upstream_base = upstream["remote"].removesuffix(".git")
     for patch in patches:
         if (
@@ -335,8 +338,122 @@ def validate_manifest(value: Any) -> tuple[bool, dict[str, str], list[str]]:
             )
             is None
         ):
-            return False, {}, []
-    return True, reviewed, controls
+            return False, {}, [], []
+
+    downstream_patches = value.get("downstream_patches")
+    downstream_patch_keys = {
+        "files",
+        "head_commit_sha",
+        "issue",
+        "patch_sha256",
+        "pull_request",
+    }
+    if not isinstance(downstream_patches, list):
+        return False, {}, [], []
+    fork_base = value["fork"]["origin"].removesuffix(".git")
+    for patch in downstream_patches:
+        if (
+            not isinstance(patch, dict)
+            or set(patch) != downstream_patch_keys
+            or not is_string_list(patch.get("files"))
+            or not patch["files"]
+            or any(normalize_repo_path(path) is None for path in patch["files"])
+            or not isinstance(patch.get("head_commit_sha"), str)
+            or SHA40_RE.fullmatch(patch["head_commit_sha"]) is None
+            or not isinstance(patch.get("patch_sha256"), str)
+            or SHA256_RE.fullmatch(patch["patch_sha256"]) is None
+            or not isinstance(patch.get("issue"), str)
+            or re.fullmatch(
+                re.escape(fork_base) + r"/issues/[1-9][0-9]*",
+                patch["issue"],
+            )
+            is None
+            or not isinstance(patch.get("pull_request"), str)
+            or re.fullmatch(
+                re.escape(fork_base) + r"/pull/[1-9][0-9]*",
+                patch["pull_request"],
+            )
+            is None
+        ):
+            return False, {}, [], []
+    return True, reviewed, controls, downstream_patches
+
+
+def verify_downstream_patches(
+    repo: Path,
+    source_sha: str,
+    patches: list[dict[str, Any]],
+    manifest_path: str,
+    violations: set[tuple[str, str, str]],
+) -> None:
+    for patch in patches:
+        commit = patch["head_commit_sha"]
+        files = sorted(patch["files"])
+        try:
+            run_command(repo, ["git", "cat-file", "-e", commit + "^{commit}"])
+        except CommandFailure:
+            add_violation(
+                violations,
+                manifest_path,
+                "provenance",
+                "downstream_patch_commit_unavailable",
+            )
+            continue
+        try:
+            run_command(repo, ["git", "merge-base", "--is-ancestor", commit, source_sha])
+        except CommandFailure:
+            add_violation(
+                violations,
+                manifest_path,
+                "provenance",
+                "downstream_patch_not_ancestor",
+            )
+        try:
+            changed_data = run_command(
+                repo,
+                ["git", "diff-tree", "--no-commit-id", "--name-only", "-r", "-z", commit],
+            )
+            changed = sorted(
+                path
+                for path in changed_data.decode("utf-8").split("\0")
+                if path
+            )
+        except (CommandFailure, UnicodeError):
+            add_violation(
+                violations,
+                manifest_path,
+                "provenance",
+                "downstream_patch_files_unavailable",
+            )
+            continue
+        if changed != files:
+            add_violation(
+                violations,
+                manifest_path,
+                "provenance",
+                "downstream_patch_files_mismatch",
+            )
+            continue
+        try:
+            patch_data = run_command(
+                repo,
+                ["git", "show", "--format=", "--no-ext-diff", "--binary", commit, "--", *files],
+            )
+        except CommandFailure:
+            add_violation(
+                violations,
+                manifest_path,
+                "provenance",
+                "downstream_patch_unavailable",
+            )
+            continue
+        if sha256(patch_data) != patch["patch_sha256"]:
+            add_violation(
+                violations,
+                manifest_path,
+                "provenance",
+                "downstream_patch_digest_mismatch",
+            )
 
 
 def safe_read(
@@ -716,6 +833,7 @@ def verify(args: argparse.Namespace) -> int:
     manifest_value: Any = None
     reviewed: dict[str, str] = {}
     declared: list[str] = []
+    downstream_patches: list[dict[str, Any]] = []
     if manifest_path not in tracked:
         add_violation(violations, manifest_path, "provenance", "invalid_manifest")
     else:
@@ -724,9 +842,17 @@ def verify(args: argparse.Namespace) -> int:
             manifest_value = json.loads(manifest_data.decode("utf-8"))
         except (UnicodeError, json.JSONDecodeError):
             add_violation(violations, manifest_path, "provenance", "invalid_manifest")
-        valid, reviewed, declared = validate_manifest(manifest_value)
+        valid, reviewed, declared, downstream_patches = validate_manifest(manifest_value)
         if not valid:
             add_violation(violations, manifest_path, "provenance", "invalid_manifest_schema")
+        elif source_sha:
+            verify_downstream_patches(
+                repo,
+                source_sha,
+                downstream_patches,
+                manifest_path,
+                violations,
+            )
 
     inputs: dict[str, str] = {}
     for path in paths:

@@ -26,7 +26,7 @@ const (
 	upstreamSpine   = "github.com/enbility/spine-go"
 	upstreamShip    = "github.com/enbility/ship-go"
 	upstreamEEBus   = "github.com/enbility/eebus-go"
-	productionHash  = "cce059b44e877ebc021fb3e52bcf16cf5f992efaf024516c0aac1676b872a12f"
+	productionHash  = "1cef141c0e7e7d93eb23a6e7cca92ea7bb546690d0218a7ee6d232df86a0e8d9"
 )
 
 func TestModuleDependencyClosure(t *testing.T) {
@@ -142,6 +142,13 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 				SHA256 string `json:"sha256"`
 			} `json:"provenance_manifest"`
 		} `json:"reviewed_dependencies"`
+		DownstreamPatches []struct {
+			Files       []string `json:"files"`
+			HeadCommit  string   `json:"head_commit_sha"`
+			Issue       string   `json:"issue"`
+			PatchSHA256 string   `json:"patch_sha256"`
+			PullRequest string   `json:"pull_request"`
+		} `json:"downstream_patches"`
 		ReviewedPatches []struct {
 			Files       []string `json:"files"`
 			HeadCommit  string   `json:"head_commit_sha"`
@@ -160,7 +167,7 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 		{"module", manifest.Module, canonicalModule},
 		{"fork.origin", manifest.Fork.Origin, "https://github.com/Project-Helianthus/helianthus-spine-go.git"},
 		{"fork.lifecycle", manifest.Fork.Lifecycle, "temporary_downstream_patch_carrier"},
-		{"fork.intended_prerelease", manifest.Fork.IntendedPrerelease, "v0.7.1-helianthus.2"},
+		{"fork.intended_prerelease", manifest.Fork.IntendedPrerelease, "v0.7.1-helianthus.3"},
 		{"upstream.remote", manifest.Upstream.Remote, "https://github.com/enbility/spine-go.git"},
 		{"upstream.tag", manifest.Upstream.Tag, "v0.7.0"},
 		{"upstream.tag_object_sha", manifest.Upstream.TagObject, "30aeb9ac51c3212d280acd93a9afaf58bc63bd92"},
@@ -182,6 +189,39 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 	}
 	if len(manifest.ReviewedPatches) != 1 {
 		t.Fatalf("manifest reviewed_patches = %d; want exactly one upstream race fix", len(manifest.ReviewedPatches))
+	}
+	if len(manifest.DownstreamPatches) != 2 {
+		t.Fatalf("manifest downstream_patches = %d; want two reviewed commits in one pending upstream contribution", len(manifest.DownstreamPatches))
+	}
+	downstream := manifest.DownstreamPatches[0]
+	downstreamWants := []struct{ name, got, want string }{
+		{"downstream.head_commit_sha", downstream.HeadCommit, "134403501d81cfa6e5133122ed506f3a4d327450"},
+		{"downstream.issue", downstream.Issue, "https://github.com/Project-Helianthus/helianthus-spine-go/issues/5"},
+		{"downstream.patch_sha256", downstream.PatchSHA256, "5c2ceebff36fb0fdb60ad40cfaff85c164c68bdfeff4ab75852c8fbf2ebf9e95"},
+		{"downstream.pull_request", downstream.PullRequest, "https://github.com/Project-Helianthus/helianthus-spine-go/pull/6"},
+	}
+	for _, check := range downstreamWants {
+		if check.got != check.want {
+			t.Errorf("manifest %s = %q; want %q", check.name, check.got, check.want)
+		}
+	}
+	if len(downstream.Files) != 1 || downstream.Files[0] != "spine/device_local.go" {
+		t.Errorf("manifest downstream files = %v; want [spine/device_local.go]", downstream.Files)
+	}
+	remediation := manifest.DownstreamPatches[1]
+	remediationWants := []struct{ name, got, want string }{
+		{"remediation.head_commit_sha", remediation.HeadCommit, "70cae6c2b059e548d717455f367f592010f1457a"},
+		{"remediation.issue", remediation.Issue, "https://github.com/Project-Helianthus/helianthus-spine-go/issues/5"},
+		{"remediation.patch_sha256", remediation.PatchSHA256, "216cbcb946f377355cefd5f1346c626495dfaee611642c23f01e1a7fac57bd28"},
+		{"remediation.pull_request", remediation.PullRequest, "https://github.com/Project-Helianthus/helianthus-spine-go/pull/6"},
+	}
+	for _, check := range remediationWants {
+		if check.got != check.want {
+			t.Errorf("manifest %s = %q; want %q", check.name, check.got, check.want)
+		}
+	}
+	if len(remediation.Files) != 1 || remediation.Files[0] != "spine/device_local.go" {
+		t.Errorf("manifest remediation files = %v; want [spine/device_local.go]", remediation.Files)
 	}
 	patch := manifest.ReviewedPatches[0]
 	patchWants := []struct{ name, got, want string }{
@@ -259,6 +299,7 @@ func TestWorkflowSupportsReleaseBranchAndSARIF(t *testing.T) {
 		"go list -deps ./...",
 		"resolved-graph-closure.json",
 		"git rev-parse HEAD",
+		"fetch-depth: 0",
 		"go version",
 		"actions/upload-artifact",
 	}
