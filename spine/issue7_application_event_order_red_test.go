@@ -46,6 +46,80 @@ func TestIssue7ApplicationCallbacksPreservePublicationOrder(t *testing.T) {
 	}
 }
 
+func TestIssue7ApplicationSubscribersDispatchIndependently(t *testing.T) {
+	slowEntered := make(chan struct{})
+	releaseSlow := make(chan struct{})
+	fastEntered := make(chan struct{})
+	slow := &issue7FuncHandler{handle: func(api.EventPayload) {
+		close(slowEntered)
+		<-releaseSlow
+	}}
+	fast := &issue7FuncHandler{handle: func(api.EventPayload) {
+		close(fastEntered)
+	}}
+	if err := Events.Subscribe(slow); err != nil {
+		t.Fatal(err)
+	}
+	if err := Events.Subscribe(fast); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = Events.Unsubscribe(slow)
+		_ = Events.Unsubscribe(fast)
+	})
+
+	Events.Publish(api.EventPayload{})
+	select {
+	case <-slowEntered:
+	case <-time.After(time.Second):
+		t.Fatal("slow subscriber did not start")
+	}
+	select {
+	case <-fastEntered:
+	case <-time.After(time.Second):
+		t.Fatal("slow subscriber blocked an independent subscriber")
+	}
+	close(releaseSlow)
+}
+
+func TestIssue7ApplicationCallbackMayUnsubscribeItself(t *testing.T) {
+	called := make(chan struct{}, 2)
+	handler := &issue7FuncHandler{}
+	handler.handle = func(api.EventPayload) {
+		called <- struct{}{}
+		if err := Events.Unsubscribe(handler); err != nil {
+			t.Errorf("reentrant unsubscribe: %v", err)
+		}
+	}
+	if err := Events.Subscribe(handler); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = Events.Unsubscribe(handler)
+	})
+
+	Events.Publish(api.EventPayload{})
+	select {
+	case <-called:
+	case <-time.After(time.Second):
+		t.Fatal("reentrant subscriber did not run")
+	}
+	Events.Publish(api.EventPayload{})
+	select {
+	case <-called:
+		t.Fatal("unsubscribed handler received a later publication")
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
+type issue7FuncHandler struct {
+	handle func(api.EventPayload)
+}
+
+func (handler *issue7FuncHandler) HandleEvent(payload api.EventPayload) {
+	handler.handle(payload)
+}
+
 type issue7OrderedHandler struct {
 	mu            sync.Mutex
 	order         []string

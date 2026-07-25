@@ -11,13 +11,17 @@ var Events events
 type eventHandlerItem struct {
 	Level   api.EventHandlerLevel
 	Handler api.EventHandlerInterface
+
+	dispatchMu sync.Mutex
+	pending    []api.EventPayload
+	running    bool
 }
 
 type events struct {
 	mu       sync.Mutex
 	muHandle sync.Mutex
 
-	handlers []eventHandlerItem // event handling outside of the core stack
+	handlers []*eventHandlerItem // event handling outside of the core stack
 }
 
 // will be used in EEBUS core directly to access the level EventHandlerLevelCore
@@ -31,7 +35,7 @@ func (r *events) subscribe(level api.EventHandlerLevel, handler api.EventHandler
 		}
 	}
 
-	newHandlerItem := eventHandlerItem{
+	newHandlerItem := &eventHandlerItem{
 		Level:   level,
 		Handler: handler,
 	}
@@ -54,7 +58,7 @@ func (r *events) unsubscribe(level api.EventHandlerLevel, handler api.EventHandl
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	var newHandlers []eventHandlerItem
+	var newHandlers []*eventHandlerItem
 	for _, item := range r.handlers {
 		if item.Level != level || item.Handler != handler {
 			newHandlers = append(newHandlers, item)
@@ -74,7 +78,7 @@ func (r *events) Unsubscribe(handler api.EventHandlerInterface) error {
 // Publish an event to all subscribers
 func (r *events) Publish(payload api.EventPayload) {
 	r.mu.Lock()
-	handler := make([]eventHandlerItem, len(r.handlers))
+	handler := make([]*eventHandlerItem, len(r.handlers))
 	copy(handler, r.handlers)
 	r.mu.Unlock()
 
@@ -97,9 +101,39 @@ func (r *events) Publish(payload api.EventPayload) {
 				// and expected actions are taken
 				item.Handler.HandleEvent(payload)
 			} else {
-				go item.Handler.HandleEvent(payload)
+				item.dispatch(payload)
 			}
 		}
 	}
 	r.muHandle.Unlock()
+}
+
+func (item *eventHandlerItem) dispatch(payload api.EventPayload) {
+	item.dispatchMu.Lock()
+	item.pending = append(item.pending, payload)
+	if item.running {
+		item.dispatchMu.Unlock()
+		return
+	}
+	item.running = true
+	item.dispatchMu.Unlock()
+
+	go item.run()
+}
+
+func (item *eventHandlerItem) run() {
+	for {
+		item.dispatchMu.Lock()
+		if len(item.pending) == 0 {
+			item.running = false
+			item.dispatchMu.Unlock()
+			return
+		}
+		payload := item.pending[0]
+		item.pending[0] = api.EventPayload{}
+		item.pending = item.pending[1:]
+		item.dispatchMu.Unlock()
+
+		item.Handler.HandleEvent(payload)
+	}
 }
