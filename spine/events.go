@@ -12,7 +12,9 @@ type eventHandlerItem struct {
 	Level   api.EventHandlerLevel
 	Handler api.EventHandlerInterface
 
+	owner      *events
 	subscribed bool
+	captures   int
 	dispatchMu sync.Mutex
 	pending    []api.EventPayload
 	running    bool
@@ -40,6 +42,7 @@ func (r *events) subscribe(level api.EventHandlerLevel, handler api.EventHandler
 	newHandlerItem := &eventHandlerItem{
 		Level:      level,
 		Handler:    handler,
+		owner:      r,
 		subscribed: true,
 	}
 	r.handlers = append(r.handlers, newHandlerItem)
@@ -64,6 +67,8 @@ func (r *events) unsubscribe(level api.EventHandlerLevel, handler api.EventHandl
 	for _, item := range r.handlers {
 		if item.Level == level && item.Handler == handler {
 			item.subscribed = false
+			r.retireLocked(item)
+			break
 		}
 	}
 
@@ -81,6 +86,7 @@ func (r *events) Publish(payload api.EventPayload) {
 	handler := make([]*eventHandlerItem, 0, len(r.handlers))
 	for _, item := range r.handlers {
 		if item.subscribed {
+			item.captures++
 			handler = append(handler, item)
 		}
 	}
@@ -107,6 +113,7 @@ func (r *events) Publish(payload api.EventPayload) {
 			} else {
 				item.dispatch(payload)
 			}
+			r.releaseCapture(item)
 		}
 	}
 	r.muHandle.Unlock()
@@ -131,6 +138,7 @@ func (item *eventHandlerItem) run() {
 		if len(item.pending) == 0 {
 			item.running = false
 			item.dispatchMu.Unlock()
+			item.owner.retire(item)
 			return
 		}
 		payload := item.pending[0]
@@ -139,5 +147,38 @@ func (item *eventHandlerItem) run() {
 		item.dispatchMu.Unlock()
 
 		item.Handler.HandleEvent(payload)
+	}
+}
+
+func (r *events) releaseCapture(item *eventHandlerItem) {
+	r.mu.Lock()
+	item.captures--
+	r.retireLocked(item)
+	r.mu.Unlock()
+}
+
+func (r *events) retire(item *eventHandlerItem) {
+	r.mu.Lock()
+	r.retireLocked(item)
+	r.mu.Unlock()
+}
+
+func (r *events) retireLocked(item *eventHandlerItem) {
+	if item.subscribed || item.captures != 0 {
+		return
+	}
+	item.dispatchMu.Lock()
+	idle := !item.running && len(item.pending) == 0
+	item.dispatchMu.Unlock()
+	if !idle {
+		return
+	}
+	for index, candidate := range r.handlers {
+		if candidate == item {
+			copy(r.handlers[index:], r.handlers[index+1:])
+			r.handlers[len(r.handlers)-1] = nil
+			r.handlers = r.handlers[:len(r.handlers)-1]
+			return
+		}
 	}
 }

@@ -421,6 +421,8 @@ def verify_downstream_patches(
     manifest_path: str,
     violations: set[tuple[str, str, str]],
 ) -> None:
+    previous_candidate: str | None = None
+    source_expectations: dict[str, str] = {}
     for patch in patches:
         base = patch["base_commit_sha"]
         files = sorted(patch["files"])
@@ -469,13 +471,27 @@ def verify_downstream_patches(
             )
             continue
 
-        matched = False
+        matched_candidate: str | None = None
         saw_files = False
         saw_patch = False
         files_unavailable = False
         patch_unavailable = False
         content_unavailable = False
         for candidate in candidates:
+            if previous_candidate is not None:
+                try:
+                    run_command(
+                        repo,
+                        [
+                            "git",
+                            "merge-base",
+                            "--is-ancestor",
+                            previous_candidate,
+                            candidate,
+                        ],
+                    )
+                except CommandFailure:
+                    continue
             try:
                 changed_data = run_command(
                     repo,
@@ -534,9 +550,22 @@ def verify_downstream_patches(
                 continue
             if content_digest != patch["content_sha256"]:
                 continue
-            matched = True
+            matched_candidate = candidate
             break
-        if matched:
+        if matched_candidate is not None:
+            previous_candidate = matched_candidate
+            try:
+                for path in files:
+                    source_expectations[path] = selected_file_content_digest(
+                        repo, matched_candidate, [path]
+                    )
+            except (CommandFailure, UnicodeError, ValueError):
+                add_violation(
+                    violations,
+                    manifest_path,
+                    "provenance",
+                    "downstream_patch_content_unavailable",
+                )
             continue
         if not saw_files:
             reason = (
@@ -557,6 +586,25 @@ def verify_downstream_patches(
                 else "downstream_patch_content_digest_mismatch"
             )
         add_violation(violations, manifest_path, "provenance", reason)
+
+    for path, expected in sorted(source_expectations.items()):
+        try:
+            current = selected_file_content_digest(repo, source_sha, [path])
+        except (CommandFailure, UnicodeError, ValueError):
+            add_violation(
+                violations,
+                manifest_path,
+                "provenance",
+                "downstream_patch_source_content_unavailable",
+            )
+            continue
+        if current != expected:
+            add_violation(
+                violations,
+                manifest_path,
+                "provenance",
+                "downstream_patch_source_content_mismatch",
+            )
 
 
 def safe_read(

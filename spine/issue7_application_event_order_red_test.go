@@ -156,6 +156,51 @@ func TestIssue7ReSubscribeKeepsTheExistingDispatcher(t *testing.T) {
 	}
 }
 
+func TestIssue7UnsubscribedDispatcherRetiresAfterDrain(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	handler := &issue7FuncHandler{handle: func(api.EventPayload) {
+		close(entered)
+		<-release
+	}}
+	if err := Events.Subscribe(handler); err != nil {
+		t.Fatal(err)
+	}
+
+	Events.Publish(api.EventPayload{})
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("application callback did not start")
+	}
+	if err := Events.Unsubscribe(handler); err != nil {
+		t.Fatal(err)
+	}
+	if !issue7HandlerRegistered(handler) {
+		t.Fatal("active dispatcher retired before its captured callback drained")
+	}
+	close(release)
+
+	deadline := time.Now().Add(time.Second)
+	for issue7HandlerRegistered(handler) && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if issue7HandlerRegistered(handler) {
+		t.Fatal("unsubscribed dispatcher remained registered after its queue drained")
+	}
+}
+
+func issue7HandlerRegistered(handler api.EventHandlerInterface) bool {
+	Events.mu.Lock()
+	defer Events.mu.Unlock()
+	for _, item := range Events.handlers {
+		if item.Handler == handler {
+			return true
+		}
+	}
+	return false
+}
+
 type issue7FuncHandler struct {
 	handle func(api.EventPayload)
 }

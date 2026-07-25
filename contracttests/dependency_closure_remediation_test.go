@@ -78,6 +78,20 @@ func TestDependencyClosureBindsDownstreamPatchContent(t *testing.T) {
 		squashFixtureDownstreamPatch(t, root)
 		assertFixtureResult(t, root, runFixtureVerifier(t, verifier, root), closureCase{wantPass: true})
 	})
+	t.Run("post attestation mutation", func(t *testing.T) {
+		root := writeClosureFixtureWithDownstreamPatch(t)
+		path := filepath.Join(root, "release", "nested.json")
+		if err := os.WriteFile(path, []byte("{\"patched\":\"again\"}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		runFixtureGit(t, root, "add", "release/nested.json")
+		runFixtureGit(t, root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgSign=false", "commit", "-q", "-m", "mutate attested content")
+		assertFixtureResult(t, root, runFixtureVerifier(t, verifier, root), closureCase{
+			wantPath:   "provenance/closure-manifest.json",
+			wantClass:  "provenance",
+			wantReason: "downstream_patch_source_content_mismatch",
+		})
+	})
 	t.Run("forged non-ancestor base", func(t *testing.T) {
 		root := writeClosureFixtureWithDownstreamPatch(t)
 		source := strings.TrimSpace(runFixtureGitOutput(t, root, "rev-parse", "HEAD"))
