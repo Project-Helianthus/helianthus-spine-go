@@ -6,7 +6,7 @@
     "go.sum"
   ],
   "fork": {
-    "intended_prerelease": "v0.7.1-helianthus.3",
+    "intended_prerelease": "v0.7.1-helianthus.4",
     "lifecycle": "temporary_downstream_patch_carrier",
     "origin": "https://github.com/Project-Helianthus/helianthus-spine-go.git"
   },
@@ -36,21 +36,29 @@
   "downstream_patches": [
     {
       "files": [
-        "spine/device_local.go"
+        ".github/workflows/default.yml",
+        "contracttests/dependency_closure_remediation_test.go",
+        "contracttests/dependency_closure_test.go",
+        "contracttests/dependency_closure_verifier_test.go",
+        "provenance/closure-manifest.json",
+        "scripts/verify_dependency_closure.py",
+        "spine/device_local.go",
+        "spine/issue5_remote_removal_race_test.go"
       ],
-      "head_commit_sha": "134403501d81cfa6e5133122ed506f3a4d327450",
+      "head_commit_sha": "1e1e5546e42a26ba65c4e8596e95f4847ba396fe",
       "issue": "https://github.com/Project-Helianthus/helianthus-spine-go/issues/5",
-      "patch_sha256": "5c2ceebff36fb0fdb60ad40cfaff85c164c68bdfeff4ab75852c8fbf2ebf9e95",
+      "patch_sha256": "4ae2baed0a523d0579de4fc7cbb7ab4b0904cc42e77b9895dd1c947d9085d8cf",
       "pull_request": "https://github.com/Project-Helianthus/helianthus-spine-go/pull/6"
     },
     {
       "files": [
-        "spine/device_local.go"
+        "spine/events.go",
+        "spine/issue7_application_event_order_red_test.go"
       ],
-      "head_commit_sha": "70cae6c2b059e548d717455f367f592010f1457a",
-      "issue": "https://github.com/Project-Helianthus/helianthus-spine-go/issues/5",
-      "patch_sha256": "216cbcb946f377355cefd5f1346c626495dfaee611642c23f01e1a7fac57bd28",
-      "pull_request": "https://github.com/Project-Helianthus/helianthus-spine-go/pull/6"
+      "head_commit_sha": "4d0ab38016ccd081eb9d3bdb0d591fd5ceb0d3b5",
+      "issue": "https://github.com/Project-Helianthus/helianthus-spine-go/issues/7",
+      "patch_sha256": "d52801ff5df3b00af779472664559ae8784edc1a606b487f0e4d35a5d2ba5e6a",
+      "pull_request": "https://github.com/Project-Helianthus/helianthus-spine-go/pull/8"
     }
   ],
   "reviewed_patches": [

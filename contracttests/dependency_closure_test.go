@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime"
 	"sort"
@@ -26,7 +27,7 @@ const (
 	upstreamSpine   = "github.com/enbility/spine-go"
 	upstreamShip    = "github.com/enbility/ship-go"
 	upstreamEEBus   = "github.com/enbility/eebus-go"
-	productionHash  = "1cef141c0e7e7d93eb23a6e7cca92ea7bb546690d0218a7ee6d232df86a0e8d9"
+	productionHash  = "e71a2e0535b870fe4f55f03bdc216b6bac18a1cf8ffbf02403a664145f687377"
 )
 
 func TestModuleDependencyClosure(t *testing.T) {
@@ -167,7 +168,7 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 		{"module", manifest.Module, canonicalModule},
 		{"fork.origin", manifest.Fork.Origin, "https://github.com/Project-Helianthus/helianthus-spine-go.git"},
 		{"fork.lifecycle", manifest.Fork.Lifecycle, "temporary_downstream_patch_carrier"},
-		{"fork.intended_prerelease", manifest.Fork.IntendedPrerelease, "v0.7.1-helianthus.3"},
+		{"fork.intended_prerelease", manifest.Fork.IntendedPrerelease, "v0.7.1-helianthus.4"},
 		{"upstream.remote", manifest.Upstream.Remote, "https://github.com/enbility/spine-go.git"},
 		{"upstream.tag", manifest.Upstream.Tag, "v0.7.0"},
 		{"upstream.tag_object_sha", manifest.Upstream.TagObject, "30aeb9ac51c3212d280acd93a9afaf58bc63bd92"},
@@ -191,13 +192,13 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 		t.Fatalf("manifest reviewed_patches = %d; want exactly one upstream race fix", len(manifest.ReviewedPatches))
 	}
 	if len(manifest.DownstreamPatches) != 2 {
-		t.Fatalf("manifest downstream_patches = %d; want two reviewed commits in one pending upstream contribution", len(manifest.DownstreamPatches))
+		t.Fatalf("manifest downstream_patches = %d; want two reviewed squash-compatible contributions", len(manifest.DownstreamPatches))
 	}
 	downstream := manifest.DownstreamPatches[0]
 	downstreamWants := []struct{ name, got, want string }{
-		{"downstream.head_commit_sha", downstream.HeadCommit, "134403501d81cfa6e5133122ed506f3a4d327450"},
+		{"downstream.head_commit_sha", downstream.HeadCommit, "1e1e5546e42a26ba65c4e8596e95f4847ba396fe"},
 		{"downstream.issue", downstream.Issue, "https://github.com/Project-Helianthus/helianthus-spine-go/issues/5"},
-		{"downstream.patch_sha256", downstream.PatchSHA256, "5c2ceebff36fb0fdb60ad40cfaff85c164c68bdfeff4ab75852c8fbf2ebf9e95"},
+		{"downstream.patch_sha256", downstream.PatchSHA256, "4ae2baed0a523d0579de4fc7cbb7ab4b0904cc42e77b9895dd1c947d9085d8cf"},
 		{"downstream.pull_request", downstream.PullRequest, "https://github.com/Project-Helianthus/helianthus-spine-go/pull/6"},
 	}
 	for _, check := range downstreamWants {
@@ -205,23 +206,34 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 			t.Errorf("manifest %s = %q; want %q", check.name, check.got, check.want)
 		}
 	}
-	if len(downstream.Files) != 1 || downstream.Files[0] != "spine/device_local.go" {
-		t.Errorf("manifest downstream files = %v; want [spine/device_local.go]", downstream.Files)
+	wantDownstreamFiles := []string{
+		".github/workflows/default.yml",
+		"contracttests/dependency_closure_remediation_test.go",
+		"contracttests/dependency_closure_test.go",
+		"contracttests/dependency_closure_verifier_test.go",
+		"provenance/closure-manifest.json",
+		"scripts/verify_dependency_closure.py",
+		"spine/device_local.go",
+		"spine/issue5_remote_removal_race_test.go",
 	}
-	remediation := manifest.DownstreamPatches[1]
-	remediationWants := []struct{ name, got, want string }{
-		{"remediation.head_commit_sha", remediation.HeadCommit, "70cae6c2b059e548d717455f367f592010f1457a"},
-		{"remediation.issue", remediation.Issue, "https://github.com/Project-Helianthus/helianthus-spine-go/issues/5"},
-		{"remediation.patch_sha256", remediation.PatchSHA256, "216cbcb946f377355cefd5f1346c626495dfaee611642c23f01e1a7fac57bd28"},
-		{"remediation.pull_request", remediation.PullRequest, "https://github.com/Project-Helianthus/helianthus-spine-go/pull/6"},
+	if !reflect.DeepEqual(downstream.Files, wantDownstreamFiles) {
+		t.Errorf("manifest downstream files = %v; want %v", downstream.Files, wantDownstreamFiles)
 	}
-	for _, check := range remediationWants {
+	orderedEvents := manifest.DownstreamPatches[1]
+	orderedEventWants := []struct{ name, got, want string }{
+		{"ordered-events.head_commit_sha", orderedEvents.HeadCommit, "4d0ab38016ccd081eb9d3bdb0d591fd5ceb0d3b5"},
+		{"ordered-events.issue", orderedEvents.Issue, "https://github.com/Project-Helianthus/helianthus-spine-go/issues/7"},
+		{"ordered-events.patch_sha256", orderedEvents.PatchSHA256, "d52801ff5df3b00af779472664559ae8784edc1a606b487f0e4d35a5d2ba5e6a"},
+		{"ordered-events.pull_request", orderedEvents.PullRequest, "https://github.com/Project-Helianthus/helianthus-spine-go/pull/8"},
+	}
+	for _, check := range orderedEventWants {
 		if check.got != check.want {
 			t.Errorf("manifest %s = %q; want %q", check.name, check.got, check.want)
 		}
 	}
-	if len(remediation.Files) != 1 || remediation.Files[0] != "spine/device_local.go" {
-		t.Errorf("manifest remediation files = %v; want [spine/device_local.go]", remediation.Files)
+	wantOrderedEventFiles := []string{"spine/events.go", "spine/issue7_application_event_order_red_test.go"}
+	if !reflect.DeepEqual(orderedEvents.Files, wantOrderedEventFiles) {
+		t.Errorf("manifest ordered-event files = %v; want %v", orderedEvents.Files, wantOrderedEventFiles)
 	}
 	patch := manifest.ReviewedPatches[0]
 	patchWants := []struct{ name, got, want string }{
