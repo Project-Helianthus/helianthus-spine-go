@@ -6,7 +6,7 @@
     "go.sum"
   ],
   "fork": {
-    "intended_prerelease": "v0.7.1-helianthus.2",
+    "intended_prerelease": "v0.7.1-helianthus.3",
     "lifecycle": "temporary_downstream_patch_carrier",
     "origin": "https://github.com/Project-Helianthus/helianthus-spine-go.git"
   },
@@ -31,6 +31,17 @@
       "tag_object_sha": "a2a1cdb32c79fcbd3e659187d2f1ec017b8e7fa7",
       "tree_sha": "1298a667e4d24c15027adf3775d99182cc174f24",
       "version": "v0.6.1-helianthus.1"
+    }
+  ],
+  "downstream_patches": [
+    {
+      "files": [
+        "spine/device_local.go"
+      ],
+      "head_commit_sha": "134403501d81cfa6e5133122ed506f3a4d327450",
+      "issue": "https://github.com/Project-Helianthus/helianthus-spine-go/issues/5",
+      "patch_sha256": "5c2ceebff36fb0fdb60ad40cfaff85c164c68bdfeff4ab75852c8fbf2ebf9e95",
+      "pull_request": "https://github.com/Project-Helianthus/helianthus-spine-go/pull/6"
     }
   ],
   "reviewed_patches": [

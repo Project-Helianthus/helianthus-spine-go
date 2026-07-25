@@ -58,6 +58,7 @@ CONFIG_NAMES = {
 }
 MANIFEST_KEYS = {
     "dependency_control_inputs",
+    "downstream_patches",
     "fork",
     "license",
     "module",
@@ -332,6 +333,42 @@ def validate_manifest(value: Any) -> tuple[bool, dict[str, str], list[str]]:
             or re.fullmatch(
                 re.escape(upstream_base) + r"/pull/[1-9][0-9]*",
                 patch["upstream_pr"],
+            )
+            is None
+        ):
+            return False, {}, []
+
+    downstream_patches = value.get("downstream_patches")
+    downstream_patch_keys = {
+        "files",
+        "head_commit_sha",
+        "issue",
+        "patch_sha256",
+        "pull_request",
+    }
+    if not isinstance(downstream_patches, list):
+        return False, {}, []
+    fork_base = value["fork"]["origin"].removesuffix(".git")
+    for patch in downstream_patches:
+        if (
+            not isinstance(patch, dict)
+            or set(patch) != downstream_patch_keys
+            or not is_string_list(patch.get("files"))
+            or any(normalize_repo_path(path) is None for path in patch["files"])
+            or not isinstance(patch.get("head_commit_sha"), str)
+            or SHA40_RE.fullmatch(patch["head_commit_sha"]) is None
+            or not isinstance(patch.get("patch_sha256"), str)
+            or SHA256_RE.fullmatch(patch["patch_sha256"]) is None
+            or not isinstance(patch.get("issue"), str)
+            or re.fullmatch(
+                re.escape(fork_base) + r"/issues/[1-9][0-9]*",
+                patch["issue"],
+            )
+            is None
+            or not isinstance(patch.get("pull_request"), str)
+            or re.fullmatch(
+                re.escape(fork_base) + r"/pull/[1-9][0-9]*",
+                patch["pull_request"],
             )
             is None
         ):

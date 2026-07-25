@@ -274,6 +274,7 @@ require (
     "scripts/release.sh",
     "release/release.json"
   ],
+  "downstream_patches": [],
   "fork": {
     "intended_prerelease": "v0.0.1-helianthus.1",
     "lifecycle": "temporary_downstream_patch_carrier",
