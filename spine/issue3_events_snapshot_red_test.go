@@ -29,7 +29,11 @@ func TestIssue3PublishUsesCapturedSnapshotDuringUnsubscribe(t *testing.T) {
 		Events.Publish(api.EventPayload{})
 		close(published)
 	}()
-	<-core.entered
+	select {
+	case <-core.entered:
+	case <-time.After(time.Second):
+		t.Fatal("core handler was not invoked")
+	}
 
 	if err := Events.Unsubscribe(application); err != nil {
 		t.Fatal(err)

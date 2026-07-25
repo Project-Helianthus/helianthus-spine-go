@@ -218,10 +218,7 @@ def valid_digest_record(value: Any, *, with_path: bool) -> bool:
 
 
 def validate_manifest(value: Any) -> tuple[bool, dict[str, str], list[str]]:
-    if (
-        not isinstance(value, dict)
-        or set(value) not in (MANIFEST_KEYS, MANIFEST_KEYS - {"reviewed_patches"})
-    ):
+    if not isinstance(value, dict) or set(value) != MANIFEST_KEYS:
         return False, {}, []
     if value.get("schema") != MANIFEST_SCHEMA or not isinstance(value.get("module"), str):
         return False, {}, []
@@ -301,7 +298,7 @@ def validate_manifest(value: Any) -> tuple[bool, dict[str, str], list[str]]:
             return False, {}, []
         reviewed[module] = version
 
-    patches = value.get("reviewed_patches", [])
+    patches = value.get("reviewed_patches")
     patch_keys = {
         "files",
         "head_commit_sha",
@@ -309,8 +306,9 @@ def validate_manifest(value: Any) -> tuple[bool, dict[str, str], list[str]]:
         "upstream_issue",
         "upstream_pr",
     }
-    if not isinstance(patches, list):
+    if not isinstance(patches, list) or not patches:
         return False, {}, []
+    upstream_base = upstream["remote"].removesuffix(".git")
     for patch in patches:
         if (
             not isinstance(patch, dict)
@@ -324,13 +322,18 @@ def validate_manifest(value: Any) -> tuple[bool, dict[str, str], list[str]]:
             )
             or not all(
                 isinstance(patch.get(field), str)
-                and re.fullmatch(
-                    r"https://github[.]com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/"
-                    r"(?:issues|pull)/[1-9][0-9]*",
-                    patch[field],
-                )
                 for field in ("upstream_issue", "upstream_pr")
             )
+            or re.fullmatch(
+                re.escape(upstream_base) + r"/issues/[1-9][0-9]*",
+                patch["upstream_issue"],
+            )
+            is None
+            or re.fullmatch(
+                re.escape(upstream_base) + r"/pull/[1-9][0-9]*",
+                patch["upstream_pr"],
+            )
+            is None
         ):
             return False, {}, []
     return True, reviewed, controls
