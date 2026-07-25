@@ -299,6 +299,7 @@ func TestWorkflowSupportsReleaseBranchAndSARIF(t *testing.T) {
 		"go list -deps ./...",
 		"resolved-graph-closure.json",
 		"git rev-parse HEAD",
+		"fetch-depth: 0",
 		"go version",
 		"actions/upload-artifact",
 	}
