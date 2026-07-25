@@ -6,7 +6,7 @@
     "go.sum"
   ],
   "fork": {
-    "intended_prerelease": "v0.7.1-helianthus.1",
+    "intended_prerelease": "v0.7.1-helianthus.2",
     "lifecycle": "temporary_downstream_patch_carrier",
     "origin": "https://github.com/Project-Helianthus/helianthus-spine-go.git"
   },
@@ -31,6 +31,17 @@
       "tag_object_sha": "a2a1cdb32c79fcbd3e659187d2f1ec017b8e7fa7",
       "tree_sha": "1298a667e4d24c15027adf3775d99182cc174f24",
       "version": "v0.6.1-helianthus.1"
+    }
+  ],
+  "reviewed_patches": [
+    {
+      "files": [
+        "spine/events.go"
+      ],
+      "head_commit_sha": "8cfa9c8d49ba8f989ef889326249cb48797cd68a",
+      "merge_commit_sha": "f5aacd95d389c04f2455c121ed2e74ac95f19712",
+      "upstream_issue": "https://github.com/enbility/spine-go/issues/38",
+      "upstream_pr": "https://github.com/enbility/spine-go/pull/39"
     }
   ],
   "schema": "helianthus.provenance.closure-manifest.v1",

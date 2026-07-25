@@ -314,6 +314,15 @@ require (
       "version": "v0.7.1-helianthus.1"
     }
   ],
+  "reviewed_patches": [
+    {
+      "files": ["main.go"],
+      "head_commit_sha": "dddddddddddddddddddddddddddddddddddddddd",
+      "merge_commit_sha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "upstream_issue": "https://example.invalid/upstream/issues/1",
+      "upstream_pr": "https://example.invalid/upstream/pull/2"
+    }
+  ],
   "schema": "helianthus.provenance.closure-manifest.v1",
   "source_header_inventory": {"globs": ["**/*.go"], "headers": []},
   "upstream": {
