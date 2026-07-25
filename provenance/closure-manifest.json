@@ -52,7 +52,7 @@
     },
     {
       "base_commit_sha": "1e1e5546e42a26ba65c4e8596e95f4847ba396fe",
-      "content_sha256": "d6e83f0f31dc7d1250eadcf0d715048a8f31300fe56f3377e869ef4c90770703",
+      "content_sha256": "635a98929e335b43af5a6893554914b8354c9fc5e6b439b39b7501f5af7e54fd",
       "files": [
         "contracttests/dependency_closure_remediation_test.go",
         "contracttests/dependency_closure_test.go",
@@ -62,7 +62,7 @@
         "spine/issue7_application_event_order_red_test.go"
       ],
       "issue": "https://github.com/Project-Helianthus/helianthus-spine-go/issues/7",
-      "patch_sha256": "8b1fd0e77908b66785498f1f9db1c2c55b0458ecfea4b4d6e760d827b61e3f87",
+      "patch_sha256": "81ac9d3be0795f4e76c1f7b4c55242f2df68c039452d4fba54fca7152d56ccbc",
       "pull_request": "https://github.com/Project-Helianthus/helianthus-spine-go/pull/8"
     }
   ],
