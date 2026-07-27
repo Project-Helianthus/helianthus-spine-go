@@ -67,12 +67,14 @@ func (w *correlatedWriteRecorder) count() int {
 }
 
 type correlatedFixture struct {
-	local        *DeviceLocal
-	remote       *DeviceRemote
-	sender       *Sender
-	roundTripper api.CorrelatedRoundTripper
-	request      api.CorrelatedRequest
-	reply        model.CmdType
+	local         *DeviceLocal
+	localFeature  *FeatureLocal
+	remote        *DeviceRemote
+	remoteFeature *FeatureRemote
+	sender        *Sender
+	roundTripper  api.CorrelatedRoundTripper
+	request       api.CorrelatedRequest
+	reply         model.CmdType
 }
 
 func newCorrelatedFixture(t *testing.T, writer *correlatedWriteRecorder, ski string) *correlatedFixture {
@@ -146,13 +148,23 @@ func newCorrelatedFixture(t *testing.T, writer *correlatedWriteRecorder, ski str
 	}
 
 	return &correlatedFixture{
-		local:        local,
-		remote:       remote,
-		sender:       sender,
-		roundTripper: roundTripper,
-		request:      request,
-		reply:        reply,
+		local:         local,
+		localFeature:  localFeature,
+		remote:        remote,
+		remoteFeature: remoteFeature,
+		sender:        sender,
+		roundTripper:  roundTripper,
+		request:       request,
+		reply:         reply,
 	}
+}
+
+type correlatedEventCounter struct {
+	count atomic.Int32
+}
+
+func (c *correlatedEventCounter) HandleEvent(api.EventPayload) {
+	c.count.Add(1)
 }
 
 func correlatedResponse(
@@ -624,6 +636,144 @@ func TestCorrelatedRoundTripSameSKIReplacementRetiresOldGeneration(t *testing.T)
 	var protocolErr *api.CorrelatedProtocolError
 	if !errors.As(got.err, &protocolErr) {
 		t.Fatalf("new generation RoundTrip() error = %T %v, want protocol error", got.err, got.err)
+	}
+}
+
+func TestCorrelatedRoundTripRetiredReaderHasNoLegacyEffects(t *testing.T) {
+	tests := []struct {
+		name   string
+		retire func(*correlatedFixture)
+	}{
+		{
+			name: "same-SKI replacement",
+			retire: func(fixture *correlatedFixture) {
+				replacement := NewDeviceRemote(
+					fixture.local,
+					fixture.remote.Ski(),
+					NewSender(newCorrelatedWriteRecorder()),
+				)
+				fixture.local.AddRemoteDeviceForSki(fixture.remote.Ski(), replacement)
+			},
+		},
+		{
+			name: "disconnect",
+			retire: func(fixture *correlatedFixture) {
+				fixture.local.RemoveRemoteDeviceConnection(fixture.remote.Ski())
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			writer := newCorrelatedWriteRecorder()
+			fixture := newCorrelatedFixture(t, writer, "retired-reader")
+
+			result := startCorrelatedRoundTrip(context.Background(), fixture.roundTripper, fixture.request)
+			request := writer.next(t)
+			callback := make(chan api.ResponseMessage, 1)
+			if err := fixture.localFeature.AddResponseCallback(
+				*request.Header.MsgCounter,
+				func(message api.ResponseMessage) {
+					callback <- message
+				},
+			); err != nil {
+				t.Fatalf("AddResponseCallback() error = %v", err)
+			}
+
+			tt.retire(fixture)
+			if got := receiveCorrelatedResult(t, result); !errors.Is(got.err, api.ErrCorrelatedRoundTripClosed) {
+				t.Fatalf("retired RoundTrip() error = %v, want sender closed", got.err)
+			}
+
+			events := &correlatedEventCounter{}
+			if err := Events.subscribe(api.EventHandlerLevelCore, events); err != nil {
+				t.Fatalf("Events.subscribe() error = %v", err)
+			}
+			defer func() {
+				_ = Events.unsubscribe(api.EventHandlerLevelCore, events)
+			}()
+
+			_, err := fixture.remote.HandleSpineMesssage(
+				correlatedResponse(request, model.CmdClassifierTypeReply, []model.CmdType{fixture.reply}),
+			)
+			if !errors.Is(err, api.ErrCorrelatedRoundTripClosed) {
+				t.Errorf("retired HandleSpineMesssage() error = %v, want sender closed", err)
+			}
+			if got := fixture.remoteFeature.DataCopy(
+				model.FunctionTypeDeviceClassificationManufacturerData,
+			); got != nil {
+				t.Errorf("retired reader mutated remote feature cache: %+v", got)
+			}
+			select {
+			case message := <-callback:
+				t.Errorf("retired reader invoked legacy callback: %+v", message)
+			case <-time.After(25 * time.Millisecond):
+			}
+			if got := events.count.Load(); got != 0 {
+				t.Errorf("retired reader published %d events, want 0", got)
+			}
+		})
+	}
+}
+
+func TestCorrelatedRoundTripCloseWaitsForAdmittedSend(t *testing.T) {
+	writer := newCorrelatedWriteRecorder()
+	fixture := newCorrelatedFixture(t, writer, "send-admission")
+	writeEntered := make(chan struct{})
+	releaseWrite := make(chan struct{})
+	writer.onWrite = func(model.DatagramType) {
+		close(writeEntered)
+		<-releaseWrite
+	}
+
+	result := startCorrelatedRoundTrip(context.Background(), fixture.roundTripper, fixture.request)
+	select {
+	case <-writeEntered:
+	case <-time.After(correlatedTestTimeout):
+		t.Fatal("timed out waiting for admitted transport write")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- fixture.roundTripper.Close()
+	}()
+
+	closedBeforeWriteReturned := false
+	select {
+	case err := <-closeDone:
+		closedBeforeWriteReturned = true
+		if err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	close(releaseWrite)
+	if !closedBeforeWriteReturned {
+		select {
+		case err := <-closeDone:
+			if err != nil {
+				t.Errorf("Close() error = %v", err)
+			}
+		case <-time.After(correlatedTestTimeout):
+			t.Fatal("Close() did not return after transport write completed")
+		}
+	}
+	if closedBeforeWriteReturned {
+		t.Error("Close() returned before the admitted transport write completed")
+	}
+
+	if got := receiveCorrelatedResult(t, result); !errors.Is(got.err, api.ErrCorrelatedRoundTripClosed) {
+		t.Fatalf("RoundTrip() error = %v, want sender closed", got.err)
+	}
+	if _, err := fixture.roundTripper.RoundTrip(
+		context.Background(),
+		fixture.request,
+	); !errors.Is(err, api.ErrCorrelatedRoundTripClosed) {
+		t.Fatalf("post-retirement RoundTrip() error = %v, want sender closed", err)
+	}
+	if got := writer.count(); got != 1 {
+		t.Fatalf("wire writes = %d, want only the admitted write", got)
 	}
 }
 
