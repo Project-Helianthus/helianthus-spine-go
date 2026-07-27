@@ -34,9 +34,14 @@ type Sender struct {
 	muxReadCache   sync.RWMutex
 
 	roundTripMux          sync.Mutex
+	roundTripCloseMux     sync.Mutex
+	roundTripIdle         *sync.Cond
 	pendingRoundTrips     map[model.MsgCounterType]*pendingCorrelatedRoundTrip
 	roundTripTombstones   []model.MsgCounterType
 	retiredHighWatermark  model.MsgCounterType
+	activeRoundTripSends  int
+	activeRoundTripReads  int
+	roundTripsRetiring    bool
 	roundTripsClosed      bool
 	roundTripExhausted    bool
 	messageCounterWrapped atomic.Bool
@@ -82,18 +87,16 @@ func (c *Sender) sendSpineMessage(datagram model.DatagramType) error {
 		return errors.New("outgoing interface implementation not set")
 	}
 
-	c.roundTripMux.Lock()
-	closed := c.roundTripsClosed
-	c.roundTripMux.Unlock()
-	if closed {
-		return api.ErrCorrelatedRoundTripClosed
-	}
-
 	if msg == nil {
 		return errors.New("message is nil")
 	}
 
 	logging.Log().Debug(datagram.PrintMessageOverview(true, "", ""))
+
+	if err := c.beginSpineSend(); err != nil {
+		return err
+	}
+	defer c.endSpineSend()
 
 	// write to channel
 	c.writeHandler.WriteShipMessageWithPayload(msg)

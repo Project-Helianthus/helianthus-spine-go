@@ -30,6 +30,11 @@ type correlatedResponseCompleter interface {
 	correlatedResponsePreflightError(datagram model.DatagramType) error
 }
 
+type incomingSpineMessageAdmitter interface {
+	beginIncomingSpineMessage() bool
+	endIncomingSpineMessage()
+}
+
 func NewDeviceRemote(localDevice api.DeviceLocalInterface, ski string, sender api.SenderInterface) *DeviceRemote {
 	res := DeviceRemote{
 		Device:      NewDevice(nil, nil, nil),
@@ -156,6 +161,13 @@ func (r *DeviceRemote) FeatureByEntityTypeAndRole(entity api.EntityRemoteInterfa
 }
 
 func (d *DeviceRemote) HandleSpineMesssage(message []byte) (*model.MsgCounterType, error) {
+	if sender, ok := d.sender.(incomingSpineMessageAdmitter); ok {
+		if !sender.beginIncomingSpineMessage() {
+			return nil, api.ErrCorrelatedRoundTripClosed
+		}
+		defer sender.endIncomingSpineMessage()
+	}
+
 	datagram := model.Datagram{}
 	if err := json.Unmarshal([]byte(message), &datagram); err != nil {
 		if sender, ok := d.sender.(correlatedResponseCompleter); ok {

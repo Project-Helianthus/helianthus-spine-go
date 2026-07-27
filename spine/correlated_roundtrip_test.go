@@ -699,9 +699,10 @@ func TestCorrelatedRoundTripRetiredReaderHasNoLegacyEffects(t *testing.T) {
 			if !errors.Is(err, api.ErrCorrelatedRoundTripClosed) {
 				t.Errorf("retired HandleSpineMesssage() error = %v, want sender closed", err)
 			}
-			if got := fixture.remoteFeature.DataCopy(
+			got, _ := fixture.remoteFeature.DataCopy(
 				model.FunctionTypeDeviceClassificationManufacturerData,
-			); got != nil {
+			).(*model.DeviceClassificationManufacturerDataType)
+			if got != nil {
 				t.Errorf("retired reader mutated remote feature cache: %+v", got)
 			}
 			select {
@@ -721,7 +722,12 @@ func TestCorrelatedRoundTripCloseWaitsForAdmittedSend(t *testing.T) {
 	fixture := newCorrelatedFixture(t, writer, "send-admission")
 	writeEntered := make(chan struct{})
 	releaseWrite := make(chan struct{})
-	writer.onWrite = func(model.DatagramType) {
+	replyError := make(chan error, 1)
+	writer.onWrite = func(request model.DatagramType) {
+		_, err := fixture.remote.HandleSpineMesssage(
+			correlatedResponse(request, model.CmdClassifierTypeReply, []model.CmdType{fixture.reply}),
+		)
+		replyError <- err
 		close(writeEntered)
 		<-releaseWrite
 	}
@@ -763,8 +769,11 @@ func TestCorrelatedRoundTripCloseWaitsForAdmittedSend(t *testing.T) {
 		t.Error("Close() returned before the admitted transport write completed")
 	}
 
-	if got := receiveCorrelatedResult(t, result); !errors.Is(got.err, api.ErrCorrelatedRoundTripClosed) {
-		t.Fatalf("RoundTrip() error = %v, want sender closed", got.err)
+	if err := <-replyError; err != nil {
+		t.Fatalf("reentrant HandleSpineMesssage() error = %v", err)
+	}
+	if got := receiveCorrelatedResult(t, result); got.err != nil {
+		t.Fatalf("admitted RoundTrip() error = %v", got.err)
 	}
 	if _, err := fixture.roundTripper.RoundTrip(
 		context.Background(),
