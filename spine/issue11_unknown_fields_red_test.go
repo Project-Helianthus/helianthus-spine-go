@@ -13,6 +13,7 @@ import (
 
 	"github.com/Project-Helianthus/helianthus-spine-go/api"
 	"github.com/Project-Helianthus/helianthus-spine-go/model"
+	"github.com/Project-Helianthus/helianthus-spine-go/util"
 )
 
 const (
@@ -35,13 +36,26 @@ func issue11ResponseWithMutation(
 ) []byte {
 	t.Helper()
 
-	message := correlatedResponse(
-		request,
-		model.CmdClassifierTypeReply,
-		[]model.CmdType{{
-			DeviceClassificationManufacturerData: &model.DeviceClassificationManufacturerDataType{},
-		}},
+	return issue11MessageWithMutation(
+		t,
+		correlatedResponse(
+			request,
+			model.CmdClassifierTypeReply,
+			[]model.CmdType{{
+				DeviceClassificationManufacturerData: &model.DeviceClassificationManufacturerDataType{},
+			}},
+		),
+		mutate,
 	)
+}
+
+func issue11MessageWithMutation(
+	t *testing.T,
+	message []byte,
+	mutate func(map[string]any),
+) []byte {
+	t.Helper()
+
 	var tree map[string]any
 	decoder := json.NewDecoder(bytes.NewReader(message))
 	decoder.UseNumber()
@@ -55,6 +69,14 @@ func issue11ResponseWithMutation(
 		t.Fatalf("encode correlated response fixture: %v", err)
 	}
 	return result
+}
+
+func issue11ReplaceOnce(t *testing.T, message, old, replacement []byte) []byte {
+	t.Helper()
+	if count := bytes.Count(message, old); count != 1 {
+		t.Fatalf("fixture marker %q count = %d, want 1", old, count)
+	}
+	return bytes.Replace(message, old, replacement, 1)
 }
 
 func issue11Object(t *testing.T, value any, path string) map[string]any {
@@ -180,6 +202,24 @@ func issue11AssertProtocolFailure(
 	}
 }
 
+func issue11AssertRawProtocolFailure(
+	t *testing.T,
+	message func(model.DatagramType) []byte,
+) {
+	t.Helper()
+
+	writer := newCorrelatedWriteRecorder()
+	fixture := newCorrelatedFixture(t, writer, "issue11-raw-failure")
+	got := issue11StartAndReceive(t, fixture, message)
+	var protocolErr *api.CorrelatedProtocolError
+	if !errors.As(got.err, &protocolErr) {
+		t.Fatalf("RoundTrip() error = %T %v, want CorrelatedProtocolError", got.err, got.err)
+	}
+	if fixture.roundTripper.Stats().InFlight != 0 {
+		t.Fatalf("in-flight count after protocol failure = %d, want 0", fixture.roundTripper.Stats().InFlight)
+	}
+}
+
 func TestIssue11KnownOnlyResponseHasEmptyUnknownCarrier(t *testing.T) {
 	writer := newCorrelatedWriteRecorder()
 	fixture := newCorrelatedFixture(t, writer, "issue11-known")
@@ -195,6 +235,37 @@ func TestIssue11KnownOnlyResponseHasEmptyUnknownCarrier(t *testing.T) {
 	}
 	if unknowns := issue11UnknownFields(t, got.response); len(unknowns) != 0 {
 		t.Fatalf("known-only unknown fields = %+v, want empty", unknowns)
+	}
+}
+
+func TestIssue11SchemaKnownNullAndEmptyCollectionsAreNotUnknown(t *testing.T) {
+	writer := newCorrelatedWriteRecorder()
+	fixture := newCorrelatedFixture(t, writer, "issue11-schema-known-empty")
+	got := issue11StartAndReceive(t, fixture, func(request model.DatagramType) []byte {
+		return issue11ResponseWithMutation(t, request, func(tree map[string]any) {
+			header := issue11Object(
+				t,
+				issue11DatagramTree(t, tree)["header"],
+				"/datagram/header",
+			)
+			header["addressOriginator"] = map[string]any{
+				"device":  nil,
+				"entity":  []any{},
+				"feature": nil,
+			}
+			manufacturer := issue11Object(
+				t,
+				issue11CommandTree(t, tree)["deviceClassificationManufacturerData"],
+				"/datagram/payload/cmd/0/deviceClassificationManufacturerData",
+			)
+			manufacturer["deviceName"] = nil
+		})
+	})
+	if got.err != nil {
+		t.Fatalf("RoundTrip() error = %v", got.err)
+	}
+	if unknowns := issue11UnknownFields(t, got.response); len(unknowns) != 0 {
+		t.Fatalf("schema-known null/empty fields classified unknown: %+v", unknowns)
 	}
 }
 
@@ -243,6 +314,62 @@ func TestIssue11NestedUnknownResponseMembersArePreservedDeterministically(t *tes
 	if gotValue := string(unknowns[2].value); gotValue != `{"a":1,"b":2}` {
 		t.Fatalf("nested unknown value = %s, want canonical object", gotValue)
 	}
+}
+
+func TestIssue11UnknownNumberLexemeIsPreserved(t *testing.T) {
+	writer := newCorrelatedWriteRecorder()
+	fixture := newCorrelatedFixture(t, writer, "issue11-number-lexeme")
+	got := issue11StartAndReceive(t, fixture, func(request model.DatagramType) []byte {
+		return issue11ResponseWithMutation(t, request, func(tree map[string]any) {
+			issue11CommandTree(t, tree)["numberExtension"] = json.Number("1.2300e+04")
+		})
+	})
+	if got.err != nil {
+		t.Fatalf("RoundTrip() error = %v", got.err)
+	}
+	unknowns := issue11UnknownFields(t, got.response)
+	if len(unknowns) != 1 || string(unknowns[0].value) != "1.2300e+04" {
+		t.Fatalf("number unknowns = %+v, want preserved 1.2300e+04 lexeme", unknowns)
+	}
+}
+
+func TestIssue11DuplicateKeysAtKnownAndUnknownDepthFailClosed(t *testing.T) {
+	t.Run("known header object", func(t *testing.T) {
+		issue11AssertRawProtocolFailure(t, func(request model.DatagramType) []byte {
+			message := correlatedResponse(
+				request,
+				model.CmdClassifierTypeReply,
+				[]model.CmdType{{
+					DeviceClassificationManufacturerData: &model.DeviceClassificationManufacturerDataType{},
+				}},
+			)
+			marker := []byte(fmt.Sprintf(
+				`"msgCounterReference":%d`,
+				*request.Header.MsgCounter,
+			))
+			replacement := []byte(fmt.Sprintf(
+				`"msgCounterReference":%d,"msgCounterReference":%d`,
+				*request.Header.MsgCounter,
+				*request.Header.MsgCounter,
+			))
+			return issue11ReplaceOnce(t, message, marker, replacement)
+		})
+	})
+
+	t.Run("nested unknown object", func(t *testing.T) {
+		issue11AssertRawProtocolFailure(t, func(request model.DatagramType) []byte {
+			message := issue11ResponseWithMutation(t, request, func(tree map[string]any) {
+				issue11CommandTree(t, tree)["duplicateExtension"] =
+					map[string]any{"member": json.Number("1")}
+			})
+			return issue11ReplaceOnce(
+				t,
+				message,
+				[]byte(`"duplicateExtension":{"member":1}`),
+				[]byte(`"duplicateExtension":{"member":1,"member":2}`),
+			)
+		})
+	})
 }
 
 func TestIssue11UnknownValuesAreDeepCopiedAndFormattingIsNonDisclosing(t *testing.T) {
@@ -363,4 +490,149 @@ func TestIssue11MalformedOriginalResponseCompletesWithProtocolError(t *testing.T
 	if fixture.roundTripper.Stats().InFlight != 0 {
 		t.Fatalf("in-flight count after malformed response = %d, want 0", fixture.roundTripper.Stats().InFlight)
 	}
+}
+
+func TestIssue11IntermediateReadAckPreparationFailureIsTerminal(t *testing.T) {
+	writer := newCorrelatedWriteRecorder()
+	fixture := newCorrelatedFixture(t, writer, "issue11-read-ack-preflight")
+	fixture.request.AckRequest = true
+	result := startCorrelatedRoundTrip(
+		context.Background(),
+		fixture.roundTripper,
+		fixture.request,
+	)
+	request := writer.next(t)
+	message := issue11MessageWithMutation(
+		t,
+		correlatedResponse(
+			request,
+			model.CmdClassifierTypeResult,
+			[]model.CmdType{{
+				ResultData: &model.ResultDataType{
+					ErrorNumber: util.Ptr(model.ErrorNumberTypeNoError),
+				},
+			}},
+		),
+		func(tree map[string]any) {
+			datagram := issue11DatagramTree(t, tree)
+			for index := 0; index <= issue11MaxUnknownFields; index++ {
+				datagram[fmt.Sprintf("ackExtension%03d", index)] = index
+			}
+		},
+	)
+	_, _ = fixture.remote.HandleSpineMesssage(message)
+
+	got := receiveCorrelatedResult(t, result)
+	var protocolErr *api.CorrelatedProtocolError
+	if !errors.As(got.err, &protocolErr) {
+		t.Fatalf("RoundTrip() error = %T %v, want CorrelatedProtocolError", got.err, got.err)
+	}
+	if fixture.roundTripper.Stats().InFlight != 0 {
+		t.Fatalf("in-flight count after malformed READ ACK = %d, want 0", fixture.roundTripper.Stats().InFlight)
+	}
+}
+
+func TestIssue11MalformedPrimaryResponseUsesValidatedHeaderIdentity(t *testing.T) {
+	t.Run("matching header completes its waiter", func(t *testing.T) {
+		writer := newCorrelatedWriteRecorder()
+		fixture := newCorrelatedFixture(t, writer, "issue11-malformed-primary")
+		result := startCorrelatedRoundTrip(
+			context.Background(),
+			fixture.roundTripper,
+			fixture.request,
+		)
+		request := writer.next(t)
+		message := correlatedResponse(
+			request,
+			model.CmdClassifierTypeReply,
+			[]model.CmdType{fixture.reply},
+		)
+		message = issue11ReplaceOnce(
+			t,
+			message,
+			[]byte(`"brandName":"roundtrip"`),
+			[]byte(`"brandName":[`),
+		)
+		_, _ = fixture.remote.HandleSpineMesssage(message)
+
+		got := receiveCorrelatedResult(t, result)
+		var protocolErr *api.CorrelatedProtocolError
+		if !errors.As(got.err, &protocolErr) {
+			t.Fatalf("RoundTrip() error = %T %v, want CorrelatedProtocolError", got.err, got.err)
+		}
+		if fixture.roundTripper.Stats().InFlight != 0 {
+			t.Fatalf("in-flight count after malformed primary response = %d, want 0", fixture.roundTripper.Stats().InFlight)
+		}
+	})
+
+	t.Run("mismatched header cannot target another waiter", func(t *testing.T) {
+		writer := newCorrelatedWriteRecorder()
+		fixture := newCorrelatedFixture(t, writer, "issue11-malformed-target")
+		firstResult := startCorrelatedRoundTrip(
+			context.Background(),
+			fixture.roundTripper,
+			fixture.request,
+		)
+		firstRequest := writer.next(t)
+
+		secondRequestSpec := fixture.request
+		secondDevice := model.AddressDeviceType("remote-issue11-other")
+		secondRequestSpec.Destination.Device = &secondDevice
+		secondResult := startCorrelatedRoundTrip(
+			context.Background(),
+			fixture.roundTripper,
+			secondRequestSpec,
+		)
+		secondRequest := writer.next(t)
+
+		message := correlatedResponse(
+			firstRequest,
+			model.CmdClassifierTypeReply,
+			[]model.CmdType{fixture.reply},
+		)
+		firstReference := []byte(fmt.Sprintf(
+			`"msgCounterReference":%d`,
+			*firstRequest.Header.MsgCounter,
+		))
+		secondReference := []byte(fmt.Sprintf(
+			`"msgCounterReference":%d`,
+			*secondRequest.Header.MsgCounter,
+		))
+		message = issue11ReplaceOnce(t, message, firstReference, secondReference)
+		message = issue11ReplaceOnce(
+			t,
+			message,
+			[]byte(`"brandName":"roundtrip"`),
+			[]byte(`"brandName":[`),
+		)
+		_, _ = fixture.remote.HandleSpineMesssage(message)
+
+		assertNoCorrelatedResult(t, firstResult)
+		assertNoCorrelatedResult(t, secondResult)
+		if got := fixture.roundTripper.Stats().InFlight; got != 2 {
+			t.Fatalf("in-flight count after mismatched malformed header = %d, want 2", got)
+		}
+
+		_, _ = fixture.remote.HandleSpineMesssage(
+			correlatedResponse(
+				firstRequest,
+				model.CmdClassifierTypeReply,
+				[]model.CmdType{fixture.reply},
+			),
+		)
+		if got := receiveCorrelatedResult(t, firstResult); got.err != nil {
+			t.Fatalf("first RoundTrip() cleanup error = %v", got.err)
+		}
+
+		_, _ = fixture.remote.HandleSpineMesssage(
+			correlatedResponse(
+				secondRequest,
+				model.CmdClassifierTypeReply,
+				[]model.CmdType{fixture.reply},
+			),
+		)
+		if got := receiveCorrelatedResult(t, secondResult); got.err != nil {
+			t.Fatalf("second RoundTrip() cleanup error = %v", got.err)
+		}
+	})
 }
