@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -30,8 +29,10 @@ func TestIssue11CorrelatedResponseUnknownFieldCarrierContract(t *testing.T) {
 		t.Fatalf("unknown field Path = %+v, want string", path)
 	}
 	value, ok := observationType.FieldByName("Value")
-	if !ok || value.Type != reflect.TypeOf(json.RawMessage(nil)) {
-		t.Fatalf("unknown field Value = %+v, want json.RawMessage", value)
+	if !ok || value.Type.Name() != "CorrelatedUnknownValue" ||
+		value.Type.Kind() != reflect.Slice ||
+		value.Type.Elem().Kind() != reflect.Uint8 {
+		t.Fatalf("unknown field Value = %+v, want byte-backed CorrelatedUnknownValue", value)
 	}
 
 	for _, forbidden := range []string{

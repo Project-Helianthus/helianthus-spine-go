@@ -276,11 +276,16 @@ func TestIssue11UnknownValuesAreDeepCopiedAndFormattingIsNonDisclosing(t *testin
 	}
 
 	responseValue := reflect.ValueOf(got.response)
-	entry := responseValue.FieldByName("UnknownFields").Index(0).Interface()
+	entryValue := responseValue.FieldByName("UnknownFields").Index(0)
+	entry := entryValue.Interface()
 	for _, format := range []string{"%v", "%+v", "%#v", "%s", "%q"} {
 		rendered := fmt.Sprintf(format, entry)
 		if strings.Contains(rendered, secret) {
 			t.Errorf("format %q disclosed unknown value", format)
+		}
+		rendered = fmt.Sprintf(format, entryValue.FieldByName("Value").Interface())
+		if strings.Contains(rendered, secret) {
+			t.Errorf("value format %q disclosed unknown value", format)
 		}
 	}
 	if rendered := fmt.Sprintf("%+v", got.response); strings.Contains(rendered, secret) {

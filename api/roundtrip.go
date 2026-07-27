@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -32,6 +33,65 @@ type CorrelatedResponse struct {
 	CorrelationKey model.MsgCounterType
 	Header         model.HeaderType
 	Cmd            model.CmdType
+	UnknownFields  []CorrelatedUnknownField
+}
+
+// CorrelatedUnknownField is one bounded JSON object member that the typed
+// SPINE model did not represent. Path is an RFC 6901 JSON Pointer and Value is
+// an owned copy of that member's JSON value.
+type CorrelatedUnknownField struct {
+	Path  string
+	Value CorrelatedUnknownValue
+}
+
+// CorrelatedUnknownValue contains one structured JSON value. JSON returns a
+// copy; diagnostic formatting reports only its byte length.
+type CorrelatedUnknownValue json.RawMessage
+
+func (v CorrelatedUnknownValue) JSON() json.RawMessage {
+	return append(json.RawMessage(nil), v...)
+}
+
+func (v CorrelatedUnknownValue) MarshalJSON() ([]byte, error) {
+	if !json.Valid(v) {
+		return nil, errors.New("correlated unknown value is not valid JSON")
+	}
+	return append([]byte(nil), v...), nil
+}
+
+func (v CorrelatedUnknownValue) String() string {
+	return fmt.Sprintf("<redacted correlated unknown value bytes:%d>", len(v))
+}
+
+func (v CorrelatedUnknownValue) GoString() string {
+	return v.String()
+}
+
+// Format keeps the structured value out of diagnostic formatting.
+func (v CorrelatedUnknownValue) Format(state fmt.State, _ rune) {
+	_, _ = fmt.Fprintf(state, "<redacted correlated unknown value bytes:%d>", len(v))
+}
+
+func (f CorrelatedUnknownField) String() string {
+	return fmt.Sprintf(
+		"CorrelatedUnknownField{Path:%q Value:<redacted bytes:%d>}",
+		f.Path,
+		len(f.Value),
+	)
+}
+
+func (f CorrelatedUnknownField) GoString() string {
+	return f.String()
+}
+
+// Format keeps unknown values out of diagnostic formatting for every fmt verb.
+func (f CorrelatedUnknownField) Format(state fmt.State, _ rune) {
+	_, _ = fmt.Fprintf(
+		state,
+		"CorrelatedUnknownField{Path:%q Value:<redacted bytes:%d>}",
+		f.Path,
+		len(f.Value),
+	)
 }
 
 // CorrelatedRemoteError reports a correlated SPINE result with a non-zero
