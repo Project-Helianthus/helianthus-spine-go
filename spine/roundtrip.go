@@ -29,6 +29,10 @@ type pendingCorrelatedRoundTrip struct {
 	result  chan correlatedRoundTripOutcome
 }
 
+type spineSendAdmission struct {
+	sender *Sender
+}
+
 var _ api.CorrelatedRoundTripper = (*Sender)(nil)
 
 func (c *Sender) RoundTrip(ctx context.Context, request api.CorrelatedRequest) (api.CorrelatedResponse, error) {
@@ -133,22 +137,45 @@ func (c *Sender) Close() error {
 	return nil
 }
 
-func (c *Sender) admitSpineSend() error {
+func (c *Sender) admitSpineSend() (spineSendAdmission, error) {
 	c.roundTripMux.Lock()
 	defer c.roundTripMux.Unlock()
 
+	if c.roundTripsClosed {
+		return spineSendAdmission{}, api.ErrCorrelatedRoundTripClosed
+	}
+	return spineSendAdmission{sender: c}, nil
+}
+
+func (c *Sender) finishSpineSend(admission spineSendAdmission) error {
+	c.roundTripMux.Lock()
+	defer c.roundTripMux.Unlock()
+
+	if admission.sender != c {
+		return errors.New("invalid SPINE send admission")
+	}
 	if c.roundTripsClosed {
 		return api.ErrCorrelatedRoundTripClosed
 	}
 	return nil
 }
 
-func (c *Sender) finishSpineSend() error {
+func (c *Sender) finishSpineRequest(
+	admission spineSendAdmission,
+	msgCounter model.MsgCounterType,
+	hash string,
+) error {
 	c.roundTripMux.Lock()
 	defer c.roundTripMux.Unlock()
 
+	if admission.sender != c {
+		return errors.New("invalid SPINE send admission")
+	}
 	if c.roundTripsClosed {
 		return api.ErrCorrelatedRoundTripClosed
+	}
+	if len(hash) > 0 {
+		c.addMsgCounterHashToCache(msgCounter, hash)
 	}
 	return nil
 }
