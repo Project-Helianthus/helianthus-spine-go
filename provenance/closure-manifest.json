@@ -67,7 +67,7 @@
     },
     {
       "base_commit_sha": "7383c108f72309c3636d896948d7a8de6d001708",
-      "content_sha256": "800f11c381dd9554cb76e3a56d458f98ecc6ca840cc70e2adf10bef60b447dcb",
+      "content_sha256": "9faaffb8b736b1d796d130158ee73d01248b268b8b2f1b9e272c58d4aaafbc58",
       "files": [
         "api/roundtrip.go",
         "contracttests/dependency_closure_test.go",
@@ -78,7 +78,7 @@
         "spine/send.go"
       ],
       "issue": "https://github.com/Project-Helianthus/helianthus-spine-go/issues/9",
-      "patch_sha256": "c22ae3a9995ca8f1a41f0a80cf234f564722087684837fbc46fbb460198e0569",
+      "patch_sha256": "8e205d7240a6ba09993fb0444d4f093121430341d85d3e64eac845832664af36",
       "pull_request": "https://github.com/Project-Helianthus/helianthus-spine-go/pull/10"
     }
   ],
