@@ -8,7 +8,6 @@ import (
 	"math"
 	"reflect"
 	"sort"
-	"sync"
 	"sync/atomic"
 
 	"github.com/Project-Helianthus/helianthus-spine-go/api"
@@ -107,18 +106,10 @@ func (c *Sender) Stats() api.CorrelatedRoundTripStats {
 }
 
 func (c *Sender) Close() error {
-	c.roundTripCloseMux.Lock()
-	defer c.roundTripCloseMux.Unlock()
-
 	c.roundTripMux.Lock()
 	if c.roundTripsClosed {
 		c.roundTripMux.Unlock()
 		return nil
-	}
-	c.roundTripsRetiring = true
-	c.ensureRoundTripIdleLocked()
-	for c.activeRoundTripSends > 0 || c.activeRoundTripReads > 0 {
-		c.roundTripIdle.Wait()
 	}
 	c.roundTripsClosed = true
 
@@ -142,52 +133,31 @@ func (c *Sender) Close() error {
 	return nil
 }
 
-func (c *Sender) ensureRoundTripIdleLocked() {
-	if c.roundTripIdle == nil {
-		c.roundTripIdle = sync.NewCond(&c.roundTripMux)
-	}
-}
-
-func (c *Sender) beginSpineSend() error {
+func (c *Sender) admitSpineSend() error {
 	c.roundTripMux.Lock()
 	defer c.roundTripMux.Unlock()
 
-	if c.roundTripsClosed || c.roundTripsRetiring {
+	if c.roundTripsClosed {
 		return api.ErrCorrelatedRoundTripClosed
 	}
-	c.activeRoundTripSends++
 	return nil
 }
 
-func (c *Sender) endSpineSend() {
-	c.roundTripMux.Lock()
-	c.activeRoundTripSends--
-	if c.activeRoundTripSends == 0 {
-		c.ensureRoundTripIdleLocked()
-		c.roundTripIdle.Broadcast()
-	}
-	c.roundTripMux.Unlock()
-}
-
-func (c *Sender) beginIncomingSpineMessage() bool {
+func (c *Sender) finishSpineSend() error {
 	c.roundTripMux.Lock()
 	defer c.roundTripMux.Unlock()
 
-	if c.roundTripsClosed || (c.roundTripsRetiring && c.activeRoundTripSends == 0) {
-		return false
+	if c.roundTripsClosed {
+		return api.ErrCorrelatedRoundTripClosed
 	}
-	c.activeRoundTripReads++
-	return true
+	return nil
 }
 
-func (c *Sender) endIncomingSpineMessage() {
+func (c *Sender) admitIncomingSpineMessage() bool {
 	c.roundTripMux.Lock()
-	c.activeRoundTripReads--
-	if c.activeRoundTripReads == 0 {
-		c.ensureRoundTripIdleLocked()
-		c.roundTripIdle.Broadcast()
-	}
-	c.roundTripMux.Unlock()
+	defer c.roundTripMux.Unlock()
+
+	return !c.roundTripsClosed
 }
 
 func cloneAndValidateCorrelatedRequest(request api.CorrelatedRequest) (api.CorrelatedRequest, error) {
@@ -265,7 +235,7 @@ func (c *Sender) registerCorrelatedRoundTrip(pending *pendingCorrelatedRoundTrip
 	c.roundTripMux.Lock()
 	defer c.roundTripMux.Unlock()
 
-	if c.roundTripsClosed || c.roundTripsRetiring {
+	if c.roundTripsClosed {
 		return 0, api.ErrCorrelatedRoundTripClosed
 	}
 	if len(c.pendingRoundTrips) >= maxPendingCorrelatedRoundTrips {

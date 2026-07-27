@@ -735,24 +735,25 @@ func TestCorrelatedRoundTripCloseLinearizesWhileAdmittedSendUnwinds(t *testing.T
 		t.Fatal("timed out waiting for admitted transport write")
 	}
 
-	closeDone := make(chan error, 1)
+	retirementDone := make(chan struct{})
 	go func() {
-		closeDone <- fixture.roundTripper.Close()
+		fixture.local.RemoveRemoteDeviceConnection(fixture.remote.Ski())
+		close(retirementDone)
 	}()
 
-	closeReturnedWhileWriteBlocked := false
+	retiredWhileWriteBlocked := false
 	select {
-	case err := <-closeDone:
-		closeReturnedWhileWriteBlocked = true
-		if err != nil {
-			t.Errorf("Close() error = %v", err)
-		}
+	case <-retirementDone:
+		retiredWhileWriteBlocked = true
 	case <-time.After(25 * time.Millisecond):
 	}
 
-	if closeReturnedWhileWriteBlocked {
+	if retiredWhileWriteBlocked {
 		if stats := fixture.roundTripper.Stats(); !stats.Closed || stats.InFlight != 0 {
 			t.Errorf("Stats() after Close = %+v, want closed with no pending operation", stats)
+		}
+		if got := fixture.local.RemoteDeviceForSki(fixture.remote.Ski()); got != nil {
+			t.Errorf("remote graph entry after retirement = %T, want nil", got)
 		}
 		if _, err := fixture.roundTripper.RoundTrip(
 			context.Background(),
@@ -776,16 +777,13 @@ func TestCorrelatedRoundTripCloseLinearizesWhileAdmittedSendUnwinds(t *testing.T
 	}
 
 	close(releaseWrite)
-	if !closeReturnedWhileWriteBlocked {
+	if !retiredWhileWriteBlocked {
 		select {
-		case err := <-closeDone:
-			if err != nil {
-				t.Errorf("Close() error = %v", err)
-			}
+		case <-retirementDone:
 		case <-time.After(correlatedTestTimeout):
-			t.Fatal("Close() did not return after transport write completed")
+			t.Fatal("retirement did not return after transport write completed")
 		}
-		t.Error("Close() did not logically retire while the admitted transport write unwound")
+		t.Error("sender and graph did not logically retire while the admitted transport write unwound")
 	}
 
 	if got := receiveCorrelatedResult(t, result); !errors.Is(got.err, api.ErrCorrelatedRoundTripClosed) {

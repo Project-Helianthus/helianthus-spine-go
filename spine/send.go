@@ -34,14 +34,9 @@ type Sender struct {
 	muxReadCache   sync.RWMutex
 
 	roundTripMux          sync.Mutex
-	roundTripCloseMux     sync.Mutex
-	roundTripIdle         *sync.Cond
 	pendingRoundTrips     map[model.MsgCounterType]*pendingCorrelatedRoundTrip
 	roundTripTombstones   []model.MsgCounterType
 	retiredHighWatermark  model.MsgCounterType
-	activeRoundTripSends  int
-	activeRoundTripReads  int
-	roundTripsRetiring    bool
 	roundTripsClosed      bool
 	roundTripExhausted    bool
 	messageCounterWrapped atomic.Bool
@@ -93,15 +88,14 @@ func (c *Sender) sendSpineMessage(datagram model.DatagramType) error {
 
 	logging.Log().Debug(datagram.PrintMessageOverview(true, "", ""))
 
-	if err := c.beginSpineSend(); err != nil {
+	if err := c.admitSpineSend(); err != nil {
 		return err
 	}
-	defer c.endSpineSend()
 
 	// write to channel
 	c.writeHandler.WriteShipMessageWithPayload(msg)
 
-	return nil
+	return c.finishSpineSend()
 }
 
 // Caching of outgoing and unanswered requests, so we can filter duplicates
