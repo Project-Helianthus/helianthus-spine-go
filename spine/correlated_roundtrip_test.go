@@ -717,24 +717,20 @@ func TestCorrelatedRoundTripRetiredReaderHasNoLegacyEffects(t *testing.T) {
 	}
 }
 
-func TestCorrelatedRoundTripCloseWaitsForAdmittedSend(t *testing.T) {
+func TestCorrelatedRoundTripCloseLinearizesWhileAdmittedSendUnwinds(t *testing.T) {
 	writer := newCorrelatedWriteRecorder()
 	fixture := newCorrelatedFixture(t, writer, "send-admission")
-	writeEntered := make(chan struct{})
+	writeEntered := make(chan model.DatagramType, 1)
 	releaseWrite := make(chan struct{})
-	replyError := make(chan error, 1)
 	writer.onWrite = func(request model.DatagramType) {
-		_, err := fixture.remote.HandleSpineMesssage(
-			correlatedResponse(request, model.CmdClassifierTypeReply, []model.CmdType{fixture.reply}),
-		)
-		replyError <- err
-		close(writeEntered)
+		writeEntered <- request
 		<-releaseWrite
 	}
 
 	result := startCorrelatedRoundTrip(context.Background(), fixture.roundTripper, fixture.request)
+	var admittedRequest model.DatagramType
 	select {
-	case <-writeEntered:
+	case admittedRequest = <-writeEntered:
 	case <-time.After(correlatedTestTimeout):
 		t.Fatal("timed out waiting for admitted transport write")
 	}
@@ -744,18 +740,43 @@ func TestCorrelatedRoundTripCloseWaitsForAdmittedSend(t *testing.T) {
 		closeDone <- fixture.roundTripper.Close()
 	}()
 
-	closedBeforeWriteReturned := false
+	closeReturnedWhileWriteBlocked := false
 	select {
 	case err := <-closeDone:
-		closedBeforeWriteReturned = true
+		closeReturnedWhileWriteBlocked = true
 		if err != nil {
 			t.Errorf("Close() error = %v", err)
 		}
 	case <-time.After(25 * time.Millisecond):
 	}
 
+	if closeReturnedWhileWriteBlocked {
+		if stats := fixture.roundTripper.Stats(); !stats.Closed || stats.InFlight != 0 {
+			t.Errorf("Stats() after Close = %+v, want closed with no pending operation", stats)
+		}
+		if _, err := fixture.roundTripper.RoundTrip(
+			context.Background(),
+			fixture.request,
+		); !errors.Is(err, api.ErrCorrelatedRoundTripClosed) {
+			t.Errorf("post-retirement RoundTrip() error = %v, want sender closed", err)
+		}
+		if got := writer.count(); got != 1 {
+			t.Errorf("wire writes after retirement = %d, want only the admitted write", got)
+		}
+		_, err := fixture.remote.HandleSpineMesssage(
+			correlatedResponse(
+				admittedRequest,
+				model.CmdClassifierTypeReply,
+				[]model.CmdType{fixture.reply},
+			),
+		)
+		if !errors.Is(err, api.ErrCorrelatedRoundTripClosed) {
+			t.Errorf("post-retirement HandleSpineMesssage() error = %v, want sender closed", err)
+		}
+	}
+
 	close(releaseWrite)
-	if !closedBeforeWriteReturned {
+	if !closeReturnedWhileWriteBlocked {
 		select {
 		case err := <-closeDone:
 			if err != nil {
@@ -764,25 +785,97 @@ func TestCorrelatedRoundTripCloseWaitsForAdmittedSend(t *testing.T) {
 		case <-time.After(correlatedTestTimeout):
 			t.Fatal("Close() did not return after transport write completed")
 		}
-	}
-	if closedBeforeWriteReturned {
-		t.Error("Close() returned before the admitted transport write completed")
+		t.Error("Close() did not logically retire while the admitted transport write unwound")
 	}
 
-	if err := <-replyError; err != nil {
-		t.Fatalf("reentrant HandleSpineMesssage() error = %v", err)
+	if got := receiveCorrelatedResult(t, result); !errors.Is(got.err, api.ErrCorrelatedRoundTripClosed) {
+		t.Fatalf("admitted RoundTrip() error = %v, want sender closed", got.err)
 	}
-	if got := receiveCorrelatedResult(t, result); got.err != nil {
-		t.Fatalf("admitted RoundTrip() error = %v", got.err)
+}
+
+func TestCorrelatedRoundTripWriterCanCloseOwnSender(t *testing.T) {
+	writer := newCorrelatedWriteRecorder()
+	fixture := newCorrelatedFixture(t, writer, "self-close")
+	callback := make(chan api.ResponseMessage, 1)
+	events := &correlatedEventCounter{}
+	if err := Events.subscribe(api.EventHandlerLevelCore, events); err != nil {
+		t.Fatalf("Events.subscribe() error = %v", err)
 	}
-	if _, err := fixture.roundTripper.RoundTrip(
-		context.Background(),
-		fixture.request,
-	); !errors.Is(err, api.ErrCorrelatedRoundTripClosed) {
-		t.Fatalf("post-retirement RoundTrip() error = %v, want sender closed", err)
+	defer func() {
+		_ = Events.unsubscribe(api.EventHandlerLevelCore, events)
+	}()
+
+	type observation struct {
+		addCallbackErr error
+		closeErr       error
+		postSendErr    error
+		postReceiveErr error
+		cachedData     *model.DeviceClassificationManufacturerDataType
+		stats          api.CorrelatedRoundTripStats
+	}
+	observed := make(chan observation, 1)
+	writer.onWrite = func(request model.DatagramType) {
+		value := observation{}
+		value.addCallbackErr = fixture.localFeature.AddResponseCallback(
+			*request.Header.MsgCounter,
+			func(message api.ResponseMessage) {
+				callback <- message
+			},
+		)
+		value.closeErr = fixture.roundTripper.Close()
+		_, value.postSendErr = fixture.roundTripper.RoundTrip(
+			context.Background(),
+			fixture.request,
+		)
+		_, value.postReceiveErr = fixture.remote.HandleSpineMesssage(
+			correlatedResponse(request, model.CmdClassifierTypeReply, []model.CmdType{fixture.reply}),
+		)
+		value.cachedData, _ = fixture.remoteFeature.DataCopy(
+			model.FunctionTypeDeviceClassificationManufacturerData,
+		).(*model.DeviceClassificationManufacturerDataType)
+		value.stats = fixture.roundTripper.Stats()
+		observed <- value
+	}
+
+	result := startCorrelatedRoundTrip(context.Background(), fixture.roundTripper, fixture.request)
+	var got observation
+	select {
+	case got = <-observed:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("writer calling Close() on its own sender deadlocked")
+	}
+
+	if got.addCallbackErr != nil {
+		t.Errorf("AddResponseCallback() error = %v", got.addCallbackErr)
+	}
+	if got.closeErr != nil {
+		t.Errorf("reentrant Close() error = %v", got.closeErr)
+	}
+	if !errors.Is(got.postSendErr, api.ErrCorrelatedRoundTripClosed) {
+		t.Errorf("post-close RoundTrip() error = %v, want sender closed", got.postSendErr)
+	}
+	if !errors.Is(got.postReceiveErr, api.ErrCorrelatedRoundTripClosed) {
+		t.Errorf("post-close HandleSpineMesssage() error = %v, want sender closed", got.postReceiveErr)
+	}
+	if got.cachedData != nil {
+		t.Errorf("post-close receive mutated remote feature cache: %+v", got.cachedData)
+	}
+	if !got.stats.Closed || got.stats.InFlight != 0 {
+		t.Errorf("Stats() after reentrant Close = %+v, want closed with no pending operation", got.stats)
+	}
+	if value := receiveCorrelatedResult(t, result); !errors.Is(value.err, api.ErrCorrelatedRoundTripClosed) {
+		t.Errorf("pending RoundTrip() error = %v, want sender closed", value.err)
 	}
 	if got := writer.count(); got != 1 {
-		t.Fatalf("wire writes = %d, want only the admitted write", got)
+		t.Errorf("wire writes = %d, want only the already-admitted write", got)
+	}
+	select {
+	case message := <-callback:
+		t.Errorf("post-close receive invoked legacy callback: %+v", message)
+	case <-time.After(25 * time.Millisecond):
+	}
+	if got := events.count.Load(); got != 0 {
+		t.Errorf("post-close receive published %d events, want 0", got)
 	}
 }
 
