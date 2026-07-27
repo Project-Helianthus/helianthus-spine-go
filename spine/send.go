@@ -32,6 +32,14 @@ type Sender struct {
 
 	muxNotifyCache sync.RWMutex
 	muxReadCache   sync.RWMutex
+
+	roundTripMux          sync.Mutex
+	pendingRoundTrips     map[model.MsgCounterType]*pendingCorrelatedRoundTrip
+	roundTripTombstones   []model.MsgCounterType
+	retiredHighWatermark  model.MsgCounterType
+	roundTripsClosed      bool
+	roundTripExhausted    bool
+	messageCounterWrapped atomic.Bool
 }
 
 var _ api.SenderInterface = (*Sender)(nil)
@@ -42,6 +50,7 @@ func NewSender(writeI shipapi.ShipConnectionDataWriterInterface) api.SenderInter
 		datagramNotifyCache: &cache,
 		writeHandler:        writeI,
 		reqMsgCache:         make(reqMsgCacheData),
+		pendingRoundTrips:   make(map[model.MsgCounterType]*pendingCorrelatedRoundTrip),
 	}
 }
 
@@ -71,6 +80,13 @@ func (c *Sender) sendSpineMessage(datagram model.DatagramType) error {
 
 	if c.writeHandler == nil {
 		return errors.New("outgoing interface implementation not set")
+	}
+
+	c.roundTripMux.Lock()
+	closed := c.roundTripsClosed
+	c.roundTripMux.Unlock()
+	if closed {
+		return api.ErrCorrelatedRoundTripClosed
 	}
 
 	if msg == nil {
@@ -365,6 +381,15 @@ func (c *Sender) Unbind(senderAddress, destinationAddress *model.FeatureAddressT
 
 func (c *Sender) getMsgCounter() *model.MsgCounterType {
 	// TODO:  persistence
-	i := model.MsgCounterType(atomic.AddUint64(&c.msgNum, 1))
-	return &i
+	for {
+		current := atomic.LoadUint64(&c.msgNum)
+		next := current + 1
+		if current == ^uint64(0) {
+			c.messageCounterWrapped.Store(true)
+		}
+		if atomic.CompareAndSwapUint64(&c.msgNum, current, next) {
+			result := model.MsgCounterType(next)
+			return &result
+		}
+	}
 }

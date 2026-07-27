@@ -25,6 +25,11 @@ type DeviceRemote struct {
 	localDevice api.DeviceLocalInterface
 }
 
+type correlatedResponseCompleter interface {
+	completeCorrelatedResponse(datagram model.DatagramType, processErr error) bool
+	correlatedResponsePreflightError(datagram model.DatagramType) error
+}
+
 func NewDeviceRemote(localDevice api.DeviceLocalInterface, ski string, sender api.SenderInterface) *DeviceRemote {
 	res := DeviceRemote{
 		Device:      NewDevice(nil, nil, nil),
@@ -153,6 +158,9 @@ func (r *DeviceRemote) FeatureByEntityTypeAndRole(entity api.EntityRemoteInterfa
 func (d *DeviceRemote) HandleSpineMesssage(message []byte) (*model.MsgCounterType, error) {
 	datagram := model.Datagram{}
 	if err := json.Unmarshal([]byte(message), &datagram); err != nil {
+		if sender, ok := d.sender.(correlatedResponseCompleter); ok {
+			sender.completeCorrelatedResponse(datagram.Datagram, err)
+		}
 		return nil, err
 	}
 
@@ -160,9 +168,20 @@ func (d *DeviceRemote) HandleSpineMesssage(message []byte) (*model.MsgCounterTyp
 		d.sender.ProcessResponseForMsgCounterReference(datagram.Datagram.Header.MsgCounterReference)
 	}
 
+	if sender, ok := d.sender.(correlatedResponseCompleter); ok {
+		if err := sender.correlatedResponsePreflightError(datagram.Datagram); err != nil {
+			sender.completeCorrelatedResponse(datagram.Datagram, err)
+			logging.Log().Trace(err)
+			return datagram.Datagram.Header.MsgCounter, nil
+		}
+	}
+
 	err := d.localDevice.ProcessCmd(datagram.Datagram, d)
 	if err != nil {
 		logging.Log().Trace(err)
+	}
+	if sender, ok := d.sender.(correlatedResponseCompleter); ok {
+		sender.completeCorrelatedResponse(datagram.Datagram, err)
 	}
 
 	return datagram.Datagram.Header.MsgCounter, nil

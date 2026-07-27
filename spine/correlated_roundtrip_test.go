@@ -431,6 +431,32 @@ func TestCorrelatedRoundTripDuplicateReplyCompletesExactlyOnce(t *testing.T) {
 	}
 }
 
+func TestCorrelatedRoundTripReadAckWaitsForReply(t *testing.T) {
+	writer := newCorrelatedWriteRecorder()
+	fixture := newCorrelatedFixture(t, writer, "read-ack")
+	fixture.request.AckRequest = true
+	result := startCorrelatedRoundTrip(context.Background(), fixture.roundTripper, fixture.request)
+	request := writer.next(t)
+	noError := model.CmdType{
+		ResultData: &model.ResultDataType{ErrorNumber: util.Ptr(model.ErrorNumberTypeNoError)},
+	}
+
+	_, _ = fixture.remote.HandleSpineMesssage(
+		correlatedResponse(request, model.CmdClassifierTypeResult, []model.CmdType{noError}),
+	)
+	assertNoCorrelatedResult(t, result)
+	if got := fixture.roundTripper.Stats().InFlight; got != 1 {
+		t.Fatalf("in-flight count after intermediate ACK = %d, want 1", got)
+	}
+
+	_, _ = fixture.remote.HandleSpineMesssage(
+		correlatedResponse(request, model.CmdClassifierTypeReply, []model.CmdType{fixture.reply}),
+	)
+	if got := receiveCorrelatedResult(t, result); got.err != nil {
+		t.Fatalf("RoundTrip() error = %v", got.err)
+	}
+}
+
 func TestCorrelatedRoundTripReplyCancelRace(t *testing.T) {
 	for iteration := 0; iteration < 100; iteration++ {
 		writer := newCorrelatedWriteRecorder()
@@ -542,6 +568,7 @@ func TestCorrelatedRoundTripSameSKIReplacementRetiresOldGeneration(t *testing.T)
 	oldWriter := newCorrelatedWriteRecorder()
 	oldRemote := local.SetupRemoteDevice("replacement", oldWriter).(*DeviceRemote)
 	_ = oldWriter.next(t) // Detailed Discovery consumes generation-local key 1.
+	oldRemote.address = util.Ptr(model.AddressDeviceType("old-remote"))
 	oldRoundTripper := oldRemote.Sender().(api.CorrelatedRoundTripper)
 
 	source := *local.NodeManagement().Address()
@@ -559,6 +586,7 @@ func TestCorrelatedRoundTripSameSKIReplacementRetiresOldGeneration(t *testing.T)
 	newWriter := newCorrelatedWriteRecorder()
 	newRemote := local.SetupRemoteDevice("replacement", newWriter).(*DeviceRemote)
 	_ = newWriter.next(t) // Detailed Discovery consumes generation-local key 1.
+	newRemote.address = util.Ptr(model.AddressDeviceType("new-remote"))
 	if newRemote == oldRemote {
 		t.Fatal("same-SKI setup reused the prior remote generation")
 	}
@@ -592,8 +620,10 @@ func TestCorrelatedRoundTripSameSKIReplacementRetiresOldGeneration(t *testing.T)
 	_, _ = newRemote.HandleSpineMesssage(
 		correlatedResponse(newRequestDatagram, model.CmdClassifierTypeResult, []model.CmdType{noError}),
 	)
-	if got := receiveCorrelatedResult(t, newResult); got.err != nil {
-		t.Fatalf("new generation RoundTrip() error = %v", got.err)
+	got := receiveCorrelatedResult(t, newResult)
+	var protocolErr *api.CorrelatedProtocolError
+	if !errors.As(got.err, &protocolErr) {
+		t.Fatalf("new generation RoundTrip() error = %T %v, want protocol error", got.err, got.err)
 	}
 }
 
