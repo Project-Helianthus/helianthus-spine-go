@@ -269,6 +269,38 @@ func TestIssue11SchemaKnownNullAndEmptyCollectionsAreNotUnknown(t *testing.T) {
 	}
 }
 
+func TestIssue11SchemaTraversalUsesTagsPointersSlicesAndMaps(t *testing.T) {
+	type schemaLeaf struct {
+		Known *string `json:"known,omitempty"`
+	}
+	type schemaBranch struct {
+		Items []map[string]*schemaLeaf `json:"items,omitempty"`
+	}
+	type schemaRoot struct {
+		Tagged *schemaBranch `json:"tagged,omitempty"`
+	}
+
+	collector := correlatedUnknownCollector{
+		fields: make([]api.CorrelatedUnknownField, 0),
+	}
+	scanner := newCorrelatedJSONScanner(
+		[]byte(`{"tagged":{"items":[{"dynamic":{"known":null,"extension":[]}}]}}`),
+		&collector,
+	)
+	if err := scanner.scanSchemaValue(reflect.TypeOf(schemaRoot{}), "", 1); err != nil {
+		t.Fatalf("scan schema-guided JSON: %v", err)
+	}
+	if err := scanner.requireEOF(); err != nil {
+		t.Fatalf("finish schema-guided JSON: %v", err)
+	}
+	if len(collector.fields) != 1 {
+		t.Fatalf("unknown fields = %+v, want one nested extension", collector.fields)
+	}
+	if got := collector.fields[0].Path; got != "/tagged/items/0/dynamic/extension" {
+		t.Fatalf("unknown path = %q, want nested map-member path", got)
+	}
+}
+
 func TestIssue11NestedUnknownResponseMembersArePreservedDeterministically(t *testing.T) {
 	writer := newCorrelatedWriteRecorder()
 	fixture := newCorrelatedFixture(t, writer, "issue11-nested")
@@ -334,7 +366,7 @@ func TestIssue11UnknownNumberLexemeIsPreserved(t *testing.T) {
 }
 
 func TestIssue11DuplicateKeysAtKnownAndUnknownDepthFailClosed(t *testing.T) {
-	t.Run("known header object", func(t *testing.T) {
+	t.Run("known command object", func(t *testing.T) {
 		issue11AssertRawProtocolFailure(t, func(request model.DatagramType) []byte {
 			message := correlatedResponse(
 				request,
@@ -343,16 +375,15 @@ func TestIssue11DuplicateKeysAtKnownAndUnknownDepthFailClosed(t *testing.T) {
 					DeviceClassificationManufacturerData: &model.DeviceClassificationManufacturerDataType{},
 				}},
 			)
-			marker := []byte(fmt.Sprintf(
-				`"msgCounterReference":%d`,
-				*request.Header.MsgCounter,
-			))
-			replacement := []byte(fmt.Sprintf(
-				`"msgCounterReference":%d,"msgCounterReference":%d`,
-				*request.Header.MsgCounter,
-				*request.Header.MsgCounter,
-			))
-			return issue11ReplaceOnce(t, message, marker, replacement)
+			return issue11ReplaceOnce(
+				t,
+				message,
+				[]byte(`"deviceClassificationManufacturerData":{}`),
+				[]byte(
+					`"deviceClassificationManufacturerData":{},`+
+						`"deviceClassificationManufacturerData":{}`,
+				),
+			)
 		})
 	})
 

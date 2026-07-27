@@ -37,6 +37,10 @@ type correlatedResponseCompleter interface {
 		datagram model.DatagramType,
 		message []byte,
 	) ([]api.CorrelatedUnknownField, error)
+	completeMalformedCorrelatedResponse(
+		header model.HeaderType,
+		processErr error,
+	) bool
 }
 
 type incomingSpineMessageAdmitter interface {
@@ -178,7 +182,9 @@ func (d *DeviceRemote) HandleSpineMesssage(message []byte) (*model.MsgCounterTyp
 	datagram := model.Datagram{}
 	if err := decodeIncomingSpineDatagram(message, &datagram); err != nil {
 		if sender, ok := d.sender.(correlatedResponseCompleter); ok {
-			sender.completeCorrelatedResponse(datagram.Datagram, nil, err)
+			if header, found := extractMalformedCorrelatedHeader(message); found {
+				sender.completeMalformedCorrelatedResponse(header, err)
+			}
 		}
 		return nil, err
 	}
@@ -192,7 +198,9 @@ func (d *DeviceRemote) HandleSpineMesssage(message []byte) (*model.MsgCounterTyp
 		var err error
 		unknownFields, err = sender.prepareCorrelatedResponse(datagram.Datagram, message)
 		if err != nil {
-			sender.completeCorrelatedResponse(datagram.Datagram, nil, err)
+			if header, found := extractMalformedCorrelatedHeader(message); found {
+				sender.completeMalformedCorrelatedResponse(header, err)
+			}
 			logging.Log().Trace(err)
 			return datagram.Datagram.Header.MsgCounter, nil
 		}
