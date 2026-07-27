@@ -32,6 +32,14 @@ type Sender struct {
 
 	muxNotifyCache sync.RWMutex
 	muxReadCache   sync.RWMutex
+
+	roundTripMux          sync.Mutex
+	pendingRoundTrips     map[model.MsgCounterType]*pendingCorrelatedRoundTrip
+	roundTripTombstones   []model.MsgCounterType
+	retiredHighWatermark  model.MsgCounterType
+	roundTripsClosed      bool
+	roundTripExhausted    bool
+	messageCounterWrapped atomic.Bool
 }
 
 var _ api.SenderInterface = (*Sender)(nil)
@@ -42,6 +50,7 @@ func NewSender(writeI shipapi.ShipConnectionDataWriterInterface) api.SenderInter
 		datagramNotifyCache: &cache,
 		writeHandler:        writeI,
 		reqMsgCache:         make(reqMsgCacheData),
+		pendingRoundTrips:   make(map[model.MsgCounterType]*pendingCorrelatedRoundTrip),
 	}
 }
 
@@ -58,6 +67,24 @@ func (c *Sender) DatagramForMsgCounter(msgCounter model.MsgCounterType) (model.D
 }
 
 func (c *Sender) sendSpineMessage(datagram model.DatagramType) error {
+	admission, err := c.admitSpineSend()
+	if err != nil {
+		return err
+	}
+	if err := c.writeSpineMessageAdmitted(datagram, admission); err != nil {
+		return err
+	}
+	return c.finishSpineSend(admission)
+}
+
+func (c *Sender) writeSpineMessageAdmitted(
+	datagram model.DatagramType,
+	admission spineSendAdmission,
+) error {
+	if admission.sender != c {
+		return errors.New("invalid SPINE send admission")
+	}
+
 	// pack into datagram
 	data := model.Datagram{
 		Datagram: datagram,
@@ -152,6 +179,11 @@ func (c *Sender) ProcessResponseForMsgCounterReference(msgCounterRef *model.MsgC
 
 // Sends request
 func (c *Sender) Request(cmdClassifier model.CmdClassifierType, senderAddress, destinationAddress *model.FeatureAddressType, ackRequest bool, cmd []model.CmdType) (*model.MsgCounterType, error) {
+	admission, err := c.admitSpineSend()
+	if err != nil {
+		return nil, err
+	}
+
 	// check if there is an unanswered subscribe message for this destination and cmd and return that msgCounter
 	hash := c.hashForMessage(destinationAddress, cmd)
 	if len(hash) > 0 {
@@ -179,14 +211,13 @@ func (c *Sender) Request(cmdClassifier model.CmdClassifierType, senderAddress, d
 		datagram.Header.AckRequest = &ackRequest
 	}
 
-	err := c.sendSpineMessage(datagram)
-	if err == nil {
-		if len(hash) > 0 {
-			c.addMsgCounterHashToCache(*msgCounter, hash)
-		}
+	if err := c.writeSpineMessageAdmitted(datagram, admission); err != nil {
+		return msgCounter, err
 	}
-
-	return msgCounter, err
+	if err := c.finishSpineRequest(admission, *msgCounter, hash); err != nil {
+		return msgCounter, err
+	}
+	return msgCounter, nil
 }
 
 func (c *Sender) ResultSuccess(requestHeader *model.HeaderType, senderAddress *model.FeatureAddressType) error {
@@ -365,6 +396,15 @@ func (c *Sender) Unbind(senderAddress, destinationAddress *model.FeatureAddressT
 
 func (c *Sender) getMsgCounter() *model.MsgCounterType {
 	// TODO:  persistence
-	i := model.MsgCounterType(atomic.AddUint64(&c.msgNum, 1))
-	return &i
+	for {
+		current := atomic.LoadUint64(&c.msgNum)
+		next := current + 1
+		if current == ^uint64(0) {
+			c.messageCounterWrapped.Store(true)
+		}
+		if atomic.CompareAndSwapUint64(&c.msgNum, current, next) {
+			result := model.MsgCounterType(next)
+			return &result
+		}
+	}
 }

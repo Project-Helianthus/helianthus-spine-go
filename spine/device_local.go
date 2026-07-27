@@ -112,6 +112,10 @@ func (r *DeviceLocal) SetupRemoteDevice(ski string, writeI shipapi.ShipConnectio
 	r.remoteLifecycleMux.Lock()
 	defer r.remoteLifecycleMux.Unlock()
 
+	if r.RemoteDeviceForSki(ski) != nil {
+		r.removeRemoteDevice(ski)
+	}
+
 	sender := NewSender(writeI)
 	rDevice := NewDeviceRemote(r, ski, sender)
 
@@ -138,6 +142,9 @@ func (r *DeviceLocal) RequestRemoteDetailedDiscoveryData(rDevice api.DeviceRemot
 func (r *DeviceLocal) AddRemoteDeviceForSki(ski string, rDevice api.DeviceRemoteInterface) {
 	r.remoteLifecycleMux.Lock()
 	defer r.remoteLifecycleMux.Unlock()
+	if current := r.RemoteDeviceForSki(ski); current != nil && current != rDevice {
+		r.removeRemoteDevice(ski)
+	}
 	r.addRemoteDeviceForSki(ski, rDevice)
 }
 
@@ -173,6 +180,10 @@ func (r *DeviceLocal) removeRemoteDevice(ski string) api.DeviceRemoteInterface {
 	remoteDevice := r.RemoteDeviceForSki(ski)
 	if remoteDevice == nil {
 		return nil
+	}
+
+	if sender, ok := remoteDevice.Sender().(api.CorrelatedRoundTripper); ok {
+		_ = sender.Close()
 	}
 
 	// remove all subscriptions for this device

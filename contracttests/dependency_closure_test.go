@@ -27,7 +27,7 @@ const (
 	upstreamSpine   = "github.com/enbility/spine-go"
 	upstreamShip    = "github.com/enbility/ship-go"
 	upstreamEEBus   = "github.com/enbility/eebus-go"
-	productionHash  = "6440400501246e7ad0c58cff6928078c31e5a09791c2ccf643b4593ff921466f"
+	productionHash  = "612e90bfc9f24dce4fbc0950ac989b4d39baf3b10cd3233ddef8a5dae4517f04"
 )
 
 func TestModuleDependencyClosure(t *testing.T) {
@@ -192,8 +192,8 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 	if len(manifest.ReviewedPatches) != 1 {
 		t.Fatalf("manifest reviewed_patches = %d; want exactly one upstream race fix", len(manifest.ReviewedPatches))
 	}
-	if len(manifest.DownstreamPatches) != 2 {
-		t.Fatalf("manifest downstream_patches = %d; want two reviewed squash-compatible contributions", len(manifest.DownstreamPatches))
+	if len(manifest.DownstreamPatches) != 3 {
+		t.Fatalf("manifest downstream_patches = %d; want three reviewed squash-compatible contributions", len(manifest.DownstreamPatches))
 	}
 	downstream := manifest.DownstreamPatches[0]
 	downstreamWants := []struct{ name, got, want string }{
@@ -240,12 +240,36 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 	if !reflect.DeepEqual(orderedEvents.Files, wantOrderedEventFiles) {
 		t.Errorf("manifest ordered-event files = %v; want %v", orderedEvents.Files, wantOrderedEventFiles)
 	}
+	correlatedRoundTrip := manifest.DownstreamPatches[2]
+	correlatedRoundTripWants := []struct{ name, got, want string }{
+		{"correlated-round-trip.base_commit_sha", correlatedRoundTrip.BaseCommit, "7383c108f72309c3636d896948d7a8de6d001708"},
+		{"correlated-round-trip.issue", correlatedRoundTrip.Issue, "https://github.com/Project-Helianthus/helianthus-spine-go/issues/9"},
+		{"correlated-round-trip.pull_request", correlatedRoundTrip.PullRequest, "https://github.com/Project-Helianthus/helianthus-spine-go/pull/10"},
+	}
+	for _, check := range correlatedRoundTripWants {
+		if check.got != check.want {
+			t.Errorf("manifest %s = %q; want %q", check.name, check.got, check.want)
+		}
+	}
+	wantCorrelatedRoundTripFiles := []string{
+		"api/roundtrip.go",
+		"contracttests/dependency_closure_test.go",
+		"spine/correlated_roundtrip_test.go",
+		"spine/device_local.go",
+		"spine/device_remote.go",
+		"spine/roundtrip.go",
+		"spine/send.go",
+	}
+	if !reflect.DeepEqual(correlatedRoundTrip.Files, wantCorrelatedRoundTripFiles) {
+		t.Errorf("manifest correlated-round-trip files = %v; want %v", correlatedRoundTrip.Files, wantCorrelatedRoundTripFiles)
+	}
 	for name, record := range map[string]struct {
 		content string
 		patch   string
 	}{
-		"downstream":     {content: downstream.ContentSHA256, patch: downstream.PatchSHA256},
-		"ordered-events": {content: orderedEvents.ContentSHA256, patch: orderedEvents.PatchSHA256},
+		"downstream":            {content: downstream.ContentSHA256, patch: downstream.PatchSHA256},
+		"ordered-events":        {content: orderedEvents.ContentSHA256, patch: orderedEvents.PatchSHA256},
+		"correlated-round-trip": {content: correlatedRoundTrip.ContentSHA256, patch: correlatedRoundTrip.PatchSHA256},
 	} {
 		for kind, digest := range map[string]string{"content": record.content, "patch": record.patch} {
 			if !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(digest) {
