@@ -990,3 +990,48 @@ func TestCorrelatedRoundTripDoesNotShareLegacyRequestDeduplication(t *testing.T)
 		t.Fatalf("correlated RoundTrip() error = %v", got.err)
 	}
 }
+
+func TestCorrelatedRoundTripLegacyRequestRejectsCachedDedupAfterClose(t *testing.T) {
+	writer := newCorrelatedWriteRecorder()
+	fixture := newCorrelatedFixture(t, writer, "closed-dedup")
+	cmds := []model.CmdType{fixture.request.Cmd}
+
+	firstKey, err := fixture.sender.Request(
+		fixture.request.Classifier,
+		&fixture.request.Source,
+		&fixture.request.Destination,
+		fixture.request.AckRequest,
+		cmds,
+	)
+	if err != nil {
+		t.Fatalf("initial legacy Request() error = %v", err)
+	}
+	if firstKey == nil {
+		t.Fatal("initial legacy Request() key = nil")
+	}
+	_ = writer.next(t)
+	counterBeforeClose := atomic.LoadUint64(&fixture.sender.msgNum)
+
+	if err := fixture.roundTripper.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	repeatedKey, err := fixture.sender.Request(
+		fixture.request.Classifier,
+		&fixture.request.Source,
+		&fixture.request.Destination,
+		fixture.request.AckRequest,
+		cmds,
+	)
+	if !errors.Is(err, api.ErrCorrelatedRoundTripClosed) {
+		t.Errorf("post-close legacy Request() error = %v, want sender closed", err)
+	}
+	if repeatedKey != nil {
+		t.Errorf("post-close legacy Request() key = %d, want nil", *repeatedKey)
+	}
+	if got := writer.count(); got != 1 {
+		t.Errorf("wire writes = %d, want only the initial live request", got)
+	}
+	if got := atomic.LoadUint64(&fixture.sender.msgNum); got != counterBeforeClose {
+		t.Errorf("message counter after post-close Request() = %d, want %d", got, counterBeforeClose)
+	}
+}
