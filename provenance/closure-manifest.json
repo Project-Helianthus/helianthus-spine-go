@@ -83,7 +83,7 @@
     },
     {
       "base_commit_sha": "a35ec1c48a6cdd2cdcb9b6e56086360824fb21f2",
-      "content_sha256": "0138b81828efa27ce64ee52bcd76ac5b301b3f9af4bb622c3d20f0f8ac7d619e",
+      "content_sha256": "e83b3402e453d6b260665fa11a3f5c691705707b396c66280115e687f1a04406",
       "files": [
         "api/issue11_unknown_fields_contract_red_test.go",
         "api/roundtrip.go",
@@ -94,7 +94,7 @@
         "spine/roundtrip.go"
       ],
       "issue": "https://github.com/Project-Helianthus/helianthus-spine-go/issues/11",
-      "patch_sha256": "2a4a3685ed8e89a4db37656facd1c2573dd34758fb6f01ecc29e3450fde46989",
+      "patch_sha256": "3c29c7fa99c4fc1364741f42e3f8061c3cf42b070707d8ea7320b715bd73b7d7",
       "pull_request": "https://github.com/Project-Helianthus/helianthus-spine-go/pull/12"
     }
   ],
