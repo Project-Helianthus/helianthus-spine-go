@@ -1,8 +1,10 @@
 package spine
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"reflect"
 	"sync"
 
@@ -26,8 +28,19 @@ type DeviceRemote struct {
 }
 
 type correlatedResponseCompleter interface {
-	completeCorrelatedResponse(datagram model.DatagramType, processErr error) bool
-	correlatedResponsePreflightError(datagram model.DatagramType) error
+	completeCorrelatedResponse(
+		datagram model.DatagramType,
+		unknownFields []api.CorrelatedUnknownField,
+		processErr error,
+	) bool
+	prepareCorrelatedResponse(
+		datagram model.DatagramType,
+		message []byte,
+	) ([]api.CorrelatedUnknownField, error)
+	completeMalformedCorrelatedResponse(
+		header model.HeaderType,
+		processErr error,
+	) bool
 }
 
 type incomingSpineMessageAdmitter interface {
@@ -167,9 +180,11 @@ func (d *DeviceRemote) HandleSpineMesssage(message []byte) (*model.MsgCounterTyp
 	}
 
 	datagram := model.Datagram{}
-	if err := json.Unmarshal([]byte(message), &datagram); err != nil {
+	if err := decodeIncomingSpineDatagram(message, &datagram); err != nil {
 		if sender, ok := d.sender.(correlatedResponseCompleter); ok {
-			sender.completeCorrelatedResponse(datagram.Datagram, err)
+			if header, found := extractMalformedCorrelatedHeader(message); found {
+				sender.completeMalformedCorrelatedResponse(header, err)
+			}
 		}
 		return nil, err
 	}
@@ -178,9 +193,14 @@ func (d *DeviceRemote) HandleSpineMesssage(message []byte) (*model.MsgCounterTyp
 		d.sender.ProcessResponseForMsgCounterReference(datagram.Datagram.Header.MsgCounterReference)
 	}
 
+	var unknownFields []api.CorrelatedUnknownField
 	if sender, ok := d.sender.(correlatedResponseCompleter); ok {
-		if err := sender.correlatedResponsePreflightError(datagram.Datagram); err != nil {
-			sender.completeCorrelatedResponse(datagram.Datagram, err)
+		var err error
+		unknownFields, err = sender.prepareCorrelatedResponse(datagram.Datagram, message)
+		if err != nil {
+			if header, found := extractMalformedCorrelatedHeader(message); found {
+				sender.completeMalformedCorrelatedResponse(header, err)
+			}
 			logging.Log().Trace(err)
 			return datagram.Datagram.Header.MsgCounter, nil
 		}
@@ -191,10 +211,23 @@ func (d *DeviceRemote) HandleSpineMesssage(message []byte) (*model.MsgCounterTyp
 		logging.Log().Trace(err)
 	}
 	if sender, ok := d.sender.(correlatedResponseCompleter); ok {
-		sender.completeCorrelatedResponse(datagram.Datagram, err)
+		sender.completeCorrelatedResponse(datagram.Datagram, unknownFields, err)
 	}
 
 	return datagram.Datagram.Header.MsgCounter, nil
+}
+
+func decodeIncomingSpineDatagram(message []byte, datagram *model.Datagram) error {
+	decoder := json.NewDecoder(bytes.NewReader(message))
+	if err := decoder.Decode(datagram); err != nil {
+		return err
+	}
+
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return errors.New("SPINE message contains trailing JSON data")
+	}
+	return nil
 }
 
 func (d *DeviceRemote) Sender() api.SenderInterface {

@@ -330,7 +330,11 @@ func (c *Sender) retireCorrelatedKeyLocked(key model.MsgCounterType) {
 	c.roundTripTombstones = append(c.roundTripTombstones, key)
 }
 
-func (c *Sender) completeCorrelatedResponse(datagram model.DatagramType, processErr error) bool {
+func (c *Sender) completeCorrelatedResponse(
+	datagram model.DatagramType,
+	unknownFields []api.CorrelatedUnknownField,
+	processErr error,
+) bool {
 	reference := datagram.Header.MsgCounterReference
 	if reference == nil {
 		return false
@@ -343,46 +347,84 @@ func (c *Sender) completeCorrelatedResponse(datagram model.DatagramType, process
 		return false
 	}
 
-	outcome, terminal := classifyCorrelatedResponse(*reference, pending.request, datagram, processErr)
+	outcome, terminal := classifyCorrelatedResponse(
+		*reference,
+		pending.request,
+		datagram,
+		unknownFields,
+		processErr,
+	)
 	if !terminal {
 		return false
 	}
 	return c.finishCorrelatedRoundTrip(*reference, outcome)
 }
 
-func (c *Sender) correlatedResponsePreflightError(datagram model.DatagramType) error {
+func (c *Sender) completeMalformedCorrelatedResponse(
+	header model.HeaderType,
+	processErr error,
+) bool {
+	reference := header.MsgCounterReference
+	if reference == nil ||
+		header.AddressSource == nil ||
+		header.AddressDestination == nil {
+		return false
+	}
+
+	c.roundTripMux.Lock()
+	pending, exists := c.pendingRoundTrips[*reference]
+	c.roundTripMux.Unlock()
+	if !exists ||
+		!reflect.DeepEqual(header.AddressSource, &pending.request.Destination) ||
+		!reflect.DeepEqual(header.AddressDestination, &pending.request.Source) {
+		return false
+	}
+
+	return c.finishCorrelatedRoundTrip(*reference, correlatedRoundTripOutcome{
+		err: &api.CorrelatedProtocolError{
+			Message: "decode correlated response JSON",
+			Cause:   processErr,
+		},
+	})
+}
+
+func (c *Sender) prepareCorrelatedResponse(
+	datagram model.DatagramType,
+	message []byte,
+) ([]api.CorrelatedUnknownField, error) {
 	reference := datagram.Header.MsgCounterReference
 	if reference == nil {
-		return nil
+		return nil, nil
 	}
 
 	c.roundTripMux.Lock()
 	_, pending := c.pendingRoundTrips[*reference]
 	c.roundTripMux.Unlock()
 	if !pending {
-		return nil
+		return nil, nil
 	}
 
 	if datagram.Header.AddressSource == nil {
-		return errors.New("correlated response source address is missing")
+		return nil, errors.New("correlated response source address is missing")
 	}
 	if datagram.Header.AddressDestination == nil {
-		return errors.New("correlated response destination address is missing")
+		return nil, errors.New("correlated response destination address is missing")
 	}
 	if datagram.Header.CmdClassifier != nil &&
 		*datagram.Header.CmdClassifier == model.CmdClassifierTypeResult &&
 		len(datagram.Payload.Cmd) > 0 &&
 		(datagram.Payload.Cmd[0].ResultData == nil ||
 			datagram.Payload.Cmd[0].ResultData.ErrorNumber == nil) {
-		return errors.New("correlated result data or error number is missing")
+		return nil, errors.New("correlated result data or error number is missing")
 	}
-	return nil
+	return extractCorrelatedUnknownFields(message)
 }
 
 func classifyCorrelatedResponse(
 	key model.MsgCounterType,
 	request api.CorrelatedRequest,
 	datagram model.DatagramType,
+	unknownFields []api.CorrelatedUnknownField,
 	processErr error,
 ) (correlatedRoundTripOutcome, bool) {
 	protocolError := func(message string, cause error) (correlatedRoundTripOutcome, bool) {
@@ -413,6 +455,7 @@ func classifyCorrelatedResponse(
 		CorrelationKey: key,
 		Header:         datagram.Header,
 		Cmd:            cmd,
+		UnknownFields:  unknownFields,
 	}
 
 	switch *datagram.Header.CmdClassifier {

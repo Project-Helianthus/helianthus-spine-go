@@ -27,7 +27,7 @@ const (
 	upstreamSpine   = "github.com/enbility/spine-go"
 	upstreamShip    = "github.com/enbility/ship-go"
 	upstreamEEBus   = "github.com/enbility/eebus-go"
-	productionHash  = "612e90bfc9f24dce4fbc0950ac989b4d39baf3b10cd3233ddef8a5dae4517f04"
+	productionHash  = "50c87c6392adffa44c8826b436152f8fe1c2c7b9622585af06c6fefff06e3584"
 )
 
 func TestModuleDependencyClosure(t *testing.T) {
@@ -192,8 +192,8 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 	if len(manifest.ReviewedPatches) != 1 {
 		t.Fatalf("manifest reviewed_patches = %d; want exactly one upstream race fix", len(manifest.ReviewedPatches))
 	}
-	if len(manifest.DownstreamPatches) != 3 {
-		t.Fatalf("manifest downstream_patches = %d; want three reviewed squash-compatible contributions", len(manifest.DownstreamPatches))
+	if len(manifest.DownstreamPatches) != 4 {
+		t.Fatalf("manifest downstream_patches = %d; want four reviewed squash-compatible contributions", len(manifest.DownstreamPatches))
 	}
 	downstream := manifest.DownstreamPatches[0]
 	downstreamWants := []struct{ name, got, want string }{
@@ -263,6 +263,29 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 	if !reflect.DeepEqual(correlatedRoundTrip.Files, wantCorrelatedRoundTripFiles) {
 		t.Errorf("manifest correlated-round-trip files = %v; want %v", correlatedRoundTrip.Files, wantCorrelatedRoundTripFiles)
 	}
+	unknownFields := manifest.DownstreamPatches[3]
+	unknownFieldWants := []struct{ name, got, want string }{
+		{"unknown-fields.base_commit_sha", unknownFields.BaseCommit, "a35ec1c48a6cdd2cdcb9b6e56086360824fb21f2"},
+		{"unknown-fields.issue", unknownFields.Issue, "https://github.com/Project-Helianthus/helianthus-spine-go/issues/11"},
+		{"unknown-fields.pull_request", unknownFields.PullRequest, "https://github.com/Project-Helianthus/helianthus-spine-go/pull/12"},
+	}
+	for _, check := range unknownFieldWants {
+		if check.got != check.want {
+			t.Errorf("manifest %s = %q; want %q", check.name, check.got, check.want)
+		}
+	}
+	wantUnknownFieldFiles := []string{
+		"api/issue11_unknown_fields_contract_red_test.go",
+		"api/roundtrip.go",
+		"contracttests/dependency_closure_test.go",
+		"spine/correlated_unknown_fields.go",
+		"spine/device_remote.go",
+		"spine/issue11_unknown_fields_red_test.go",
+		"spine/roundtrip.go",
+	}
+	if !reflect.DeepEqual(unknownFields.Files, wantUnknownFieldFiles) {
+		t.Errorf("manifest unknown-field files = %v; want %v", unknownFields.Files, wantUnknownFieldFiles)
+	}
 	for name, record := range map[string]struct {
 		content string
 		patch   string
@@ -270,6 +293,7 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 		"downstream":            {content: downstream.ContentSHA256, patch: downstream.PatchSHA256},
 		"ordered-events":        {content: orderedEvents.ContentSHA256, patch: orderedEvents.PatchSHA256},
 		"correlated-round-trip": {content: correlatedRoundTrip.ContentSHA256, patch: correlatedRoundTrip.PatchSHA256},
+		"unknown-fields":        {content: unknownFields.ContentSHA256, patch: unknownFields.PatchSHA256},
 	} {
 		for kind, digest := range map[string]string{"content": record.content, "patch": record.patch} {
 			if !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(digest) {
