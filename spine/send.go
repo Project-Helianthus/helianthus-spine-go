@@ -20,6 +20,8 @@ import (
 
 type reqMsgCacheData map[model.MsgCounterType]string
 
+type spineWriterGate func() error
+
 type Sender struct {
 	msgNum uint64 // 64bit values need to be defined on top of the struct to make atomic commands work on 32bit systems
 
@@ -67,11 +69,18 @@ func (c *Sender) DatagramForMsgCounter(msgCounter model.MsgCounterType) (model.D
 }
 
 func (c *Sender) sendSpineMessage(datagram model.DatagramType) error {
+	return c.sendSpineMessageWithWriterGate(datagram, nil)
+}
+
+func (c *Sender) sendSpineMessageWithWriterGate(
+	datagram model.DatagramType,
+	writerGate spineWriterGate,
+) error {
 	admission, err := c.admitSpineSend()
 	if err != nil {
 		return err
 	}
-	if err := c.writeSpineMessageAdmitted(datagram, admission); err != nil {
+	if err := c.writeSpineMessageAdmittedWithWriterGate(datagram, admission, writerGate); err != nil {
 		return err
 	}
 	return c.finishSpineSend(admission)
@@ -80,6 +89,14 @@ func (c *Sender) sendSpineMessage(datagram model.DatagramType) error {
 func (c *Sender) writeSpineMessageAdmitted(
 	datagram model.DatagramType,
 	admission spineSendAdmission,
+) error {
+	return c.writeSpineMessageAdmittedWithWriterGate(datagram, admission, nil)
+}
+
+func (c *Sender) writeSpineMessageAdmittedWithWriterGate(
+	datagram model.DatagramType,
+	admission spineSendAdmission,
+	writerGate spineWriterGate,
 ) error {
 	if admission.sender != c {
 		return errors.New("invalid SPINE send admission")
@@ -105,6 +122,12 @@ func (c *Sender) writeSpineMessageAdmitted(
 	}
 
 	logging.Log().Debug(datagram.PrintMessageOverview(true, "", ""))
+
+	if writerGate != nil {
+		if err := writerGate(); err != nil {
+			return err
+		}
+	}
 
 	// write to channel
 	c.writeHandler.WriteShipMessageWithPayload(msg)

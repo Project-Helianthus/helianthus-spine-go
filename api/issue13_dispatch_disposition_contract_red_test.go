@@ -23,6 +23,13 @@ func TestIssue13DispatchDispositionContract(t *testing.T) {
 	if NoTransportHandoff == TransportHandoffPossible {
 		t.Fatal("dispatch dispositions collapse no handoff and possible handoff")
 	}
+	var zero DispatchDisposition
+	if zero == NoTransportHandoff || zero == TransportHandoffPossible {
+		t.Fatalf(
+			"zero DispatchDisposition = %v, want invalid/reserved value distinct from both dispositions",
+			zero,
+		)
+	}
 
 	dispositionType := reflect.TypeOf(NoTransportHandoff)
 	if dispositionType.Name() != "DispatchDisposition" {

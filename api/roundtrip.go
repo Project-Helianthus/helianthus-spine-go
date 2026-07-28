@@ -17,6 +17,36 @@ var (
 	ErrCorrelatedKeyRetired        = errors.New("correlated message counter already retired")
 )
 
+// DispatchDisposition reports whether a correlated operation reached its SHIP
+// writer. Zero is reserved so uninitialized values remain conservative.
+type DispatchDisposition uint8
+
+const (
+	NoTransportHandoff       DispatchDisposition = 1
+	TransportHandoffPossible DispatchDisposition = 2
+)
+
+// CorrelatedRoundTripError adds operation-local transport handoff evidence to a
+// terminal correlated round-trip failure.
+type CorrelatedRoundTripError struct {
+	Cause       error
+	Disposition DispatchDisposition
+}
+
+func (e *CorrelatedRoundTripError) Error() string {
+	if e == nil || e.Cause == nil {
+		return "correlated round-trip failed"
+	}
+	return e.Cause.Error()
+}
+
+func (e *CorrelatedRoundTripError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
 // CorrelatedRequest describes one full SPINE request. Cmd is encoded as the
 // sole command in the datagram payload.
 type CorrelatedRequest struct {

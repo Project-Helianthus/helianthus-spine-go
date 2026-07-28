@@ -27,7 +27,7 @@ const (
 	upstreamSpine   = "github.com/enbility/spine-go"
 	upstreamShip    = "github.com/enbility/ship-go"
 	upstreamEEBus   = "github.com/enbility/eebus-go"
-	productionHash  = "50c87c6392adffa44c8826b436152f8fe1c2c7b9622585af06c6fefff06e3584"
+	productionHash  = "ba371628f2a16b008951e054e8cb539f5814088f98166c0401026e0d82b8c6ed"
 )
 
 func TestModuleDependencyClosure(t *testing.T) {
@@ -192,8 +192,8 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 	if len(manifest.ReviewedPatches) != 1 {
 		t.Fatalf("manifest reviewed_patches = %d; want exactly one upstream race fix", len(manifest.ReviewedPatches))
 	}
-	if len(manifest.DownstreamPatches) != 4 {
-		t.Fatalf("manifest downstream_patches = %d; want four reviewed squash-compatible contributions", len(manifest.DownstreamPatches))
+	if len(manifest.DownstreamPatches) != 5 {
+		t.Fatalf("manifest downstream_patches = %d; want five reviewed squash-compatible contributions", len(manifest.DownstreamPatches))
 	}
 	downstream := manifest.DownstreamPatches[0]
 	downstreamWants := []struct{ name, got, want string }{
@@ -286,6 +286,32 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 	if !reflect.DeepEqual(unknownFields.Files, wantUnknownFieldFiles) {
 		t.Errorf("manifest unknown-field files = %v; want %v", unknownFields.Files, wantUnknownFieldFiles)
 	}
+	dispatchDisposition := manifest.DownstreamPatches[4]
+	dispatchDispositionWants := []struct{ name, got, want string }{
+		{"dispatch-disposition.base_commit_sha", dispatchDisposition.BaseCommit, "b21400335be90ea95a6cad5f512d1c8e22f2cdeb"},
+		{"dispatch-disposition.issue", dispatchDisposition.Issue, "https://github.com/Project-Helianthus/helianthus-spine-go/issues/13"},
+		{"dispatch-disposition.pull_request", dispatchDisposition.PullRequest, "https://github.com/Project-Helianthus/helianthus-spine-go/pull/14"},
+	}
+	for _, check := range dispatchDispositionWants {
+		if check.got != check.want {
+			t.Errorf("manifest %s = %q; want %q", check.name, check.got, check.want)
+		}
+	}
+	wantDispatchDispositionFiles := []string{
+		"api/issue13_dispatch_disposition_contract_red_test.go",
+		"api/roundtrip.go",
+		"contracttests/dependency_closure_test.go",
+		"spine/issue13_dispatch_disposition_red_test.go",
+		"spine/roundtrip.go",
+		"spine/send.go",
+	}
+	if !reflect.DeepEqual(dispatchDisposition.Files, wantDispatchDispositionFiles) {
+		t.Errorf(
+			"manifest dispatch-disposition files = %v; want %v",
+			dispatchDisposition.Files,
+			wantDispatchDispositionFiles,
+		)
+	}
 	for name, record := range map[string]struct {
 		content string
 		patch   string
@@ -294,6 +320,7 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 		"ordered-events":        {content: orderedEvents.ContentSHA256, patch: orderedEvents.PatchSHA256},
 		"correlated-round-trip": {content: correlatedRoundTrip.ContentSHA256, patch: correlatedRoundTrip.PatchSHA256},
 		"unknown-fields":        {content: unknownFields.ContentSHA256, patch: unknownFields.PatchSHA256},
+		"dispatch-disposition":  {content: dispatchDisposition.ContentSHA256, patch: dispatchDisposition.PatchSHA256},
 	} {
 		for kind, digest := range map[string]string{"content": record.content, "patch": record.patch} {
 			if !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(digest) {

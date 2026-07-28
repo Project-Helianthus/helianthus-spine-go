@@ -35,7 +35,20 @@ type spineSendAdmission struct {
 
 var _ api.CorrelatedRoundTripper = (*Sender)(nil)
 
-func (c *Sender) RoundTrip(ctx context.Context, request api.CorrelatedRequest) (api.CorrelatedResponse, error) {
+func (c *Sender) RoundTrip(
+	ctx context.Context,
+	request api.CorrelatedRequest,
+) (response api.CorrelatedResponse, err error) {
+	disposition := api.NoTransportHandoff
+	defer func() {
+		if err != nil {
+			err = &api.CorrelatedRoundTripError{
+				Cause:       err,
+				Disposition: disposition,
+			}
+		}
+	}()
+
 	if ctx == nil {
 		return api.CorrelatedResponse{}, errors.New("correlated round-trip context is nil")
 	}
@@ -43,7 +56,7 @@ func (c *Sender) RoundTrip(ctx context.Context, request api.CorrelatedRequest) (
 		return api.CorrelatedResponse{}, err
 	}
 
-	request, err := cloneAndValidateCorrelatedRequest(request)
+	request, err = cloneAndValidateCorrelatedRequest(request)
 	if err != nil {
 		return api.CorrelatedResponse{}, err
 	}
@@ -74,7 +87,14 @@ func (c *Sender) RoundTrip(ctx context.Context, request api.CorrelatedRequest) (
 		datagram.Header.AckRequest = &pending.request.AckRequest
 	}
 
-	if sendErr := c.sendSpineMessage(datagram); sendErr != nil {
+	writerGate := func() error {
+		if err := c.admitCorrelatedTransportHandoff(key, pending); err != nil {
+			return err
+		}
+		disposition = api.TransportHandoffPossible
+		return nil
+	}
+	if sendErr := c.sendSpineMessageWithWriterGate(datagram, writerGate); sendErr != nil {
 		if c.finishCorrelatedRoundTrip(key, correlatedRoundTripOutcome{err: sendErr}) {
 			return api.CorrelatedResponse{}, sendErr
 		}
@@ -92,6 +112,23 @@ func (c *Sender) RoundTrip(ctx context.Context, request api.CorrelatedRequest) (
 		outcome := <-pending.result
 		return outcome.response, outcome.err
 	}
+}
+
+func (c *Sender) admitCorrelatedTransportHandoff(
+	key model.MsgCounterType,
+	pending *pendingCorrelatedRoundTrip,
+) error {
+	c.roundTripMux.Lock()
+	defer c.roundTripMux.Unlock()
+
+	if c.roundTripsClosed {
+		return api.ErrCorrelatedRoundTripClosed
+	}
+	current, exists := c.pendingRoundTrips[key]
+	if !exists || current != pending {
+		return api.ErrCorrelatedRoundTripClosed
+	}
+	return nil
 }
 
 func (c *Sender) Stats() api.CorrelatedRoundTripStats {
