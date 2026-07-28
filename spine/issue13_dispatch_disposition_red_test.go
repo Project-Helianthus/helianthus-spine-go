@@ -131,7 +131,8 @@ func issue13RequireDisposition(
 			want,
 		)
 	}
-	if unwrapped := errors.Unwrap(got); unwrapped != got.Cause {
+	unwrapped := errors.Unwrap(got)
+	if !errors.Is(unwrapped, got.Cause) || !errors.Is(got.Cause, unwrapped) {
 		t.Fatalf("errors.Unwrap() = %T %v, want exact Cause", unwrapped, unwrapped)
 	}
 	if !errors.Is(err, got.Cause) {
@@ -324,7 +325,8 @@ func TestIssue13PreWriterTerminalTaxonomy(t *testing.T) {
 			wantMessage: "correlated round-trip context is nil",
 			run: func(t *testing.T) issue13TerminalObservation {
 				writer, fixture := issue13Fixture(t, "nil-context")
-				_, err := fixture.roundTripper.RoundTrip(nil, fixture.request)
+				var nilContext context.Context
+				_, err := fixture.roundTripper.RoundTrip(nilContext, fixture.request)
 				return issue13TerminalObservation{err: err, writes: writer.count()}
 			},
 		},

@@ -61,8 +61,9 @@ func TestIssue13CorrelatedRoundTripErrorUnwrapPreservesIsAndAs(t *testing.T) {
 		Disposition: TransportHandoffPossible,
 	}
 
-	if got := errors.Unwrap(err); got != protocolCause {
-		t.Fatalf("errors.Unwrap() = %T %v, want exact protocol cause", got, got)
+	unwrapped := errors.Unwrap(err)
+	if !errors.Is(unwrapped, protocolCause) || !errors.Is(protocolCause, unwrapped) {
+		t.Fatalf("errors.Unwrap() = %T %v, want protocol cause identity", unwrapped, unwrapped)
 	}
 	if !errors.Is(err, root) {
 		t.Fatalf("errors.Is(%v, root) = false", err)
