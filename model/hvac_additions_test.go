@@ -51,11 +51,11 @@ func TestHvacSystemFunctionOperationModeRelationListDataType_Update(t *testing.T
 		HvacSystemFunctionOperationModeRelationData: []HvacSystemFunctionOperationModeRelationDataType{
 			{
 				SystemFunctionId: util.Ptr(HvacSystemFunctionIdType(0)),
-				OperationModeId:  util.Ptr(HvacOperationModeIdType(0)),
+				OperationModeId:  []HvacOperationModeIdType{0},
 			},
 			{
 				SystemFunctionId: util.Ptr(HvacSystemFunctionIdType(1)),
-				OperationModeId:  util.Ptr(HvacOperationModeIdType(0)),
+				OperationModeId:  []HvacOperationModeIdType{0},
 			},
 		},
 	}
@@ -64,7 +64,7 @@ func TestHvacSystemFunctionOperationModeRelationListDataType_Update(t *testing.T
 		HvacSystemFunctionOperationModeRelationData: []HvacSystemFunctionOperationModeRelationDataType{
 			{
 				SystemFunctionId: util.Ptr(HvacSystemFunctionIdType(1)),
-				OperationModeId:  util.Ptr(HvacOperationModeIdType(1)),
+				OperationModeId:  []HvacOperationModeIdType{1},
 			},
 		},
 	}
@@ -78,11 +78,11 @@ func TestHvacSystemFunctionOperationModeRelationListDataType_Update(t *testing.T
 	assert.Equal(t, 2, len(data))
 	item1 := data[0]
 	assert.Equal(t, 0, int(*item1.SystemFunctionId))
-	assert.Equal(t, 0, int(*item1.OperationModeId))
+	assert.Equal(t, []HvacOperationModeIdType{0}, item1.OperationModeId)
 	// check properties of updated item
 	item2 := data[1]
 	assert.Equal(t, 1, int(*item2.SystemFunctionId))
-	assert.Equal(t, 1, int(*item2.OperationModeId))
+	assert.Equal(t, []HvacOperationModeIdType{1}, item2.OperationModeId)
 }
 
 func TestHvacSystemFunctionSetpointRelationListDataType_Update(t *testing.T) {
