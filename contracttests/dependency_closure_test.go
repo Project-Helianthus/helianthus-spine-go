@@ -27,7 +27,7 @@ const (
 	upstreamSpine   = "github.com/enbility/spine-go"
 	upstreamShip    = "github.com/enbility/ship-go"
 	upstreamEEBus   = "github.com/enbility/eebus-go"
-	productionHash  = "ba371628f2a16b008951e054e8cb539f5814088f98166c0401026e0d82b8c6ed"
+	productionHash  = "0e9f1753529d4b48e5a1ab3a9167fe131866a3f25f45a3484baaa12c51450c34"
 )
 
 func TestModuleDependencyClosure(t *testing.T) {
@@ -192,8 +192,8 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 	if len(manifest.ReviewedPatches) != 1 {
 		t.Fatalf("manifest reviewed_patches = %d; want exactly one upstream race fix", len(manifest.ReviewedPatches))
 	}
-	if len(manifest.DownstreamPatches) != 5 {
-		t.Fatalf("manifest downstream_patches = %d; want five reviewed squash-compatible contributions", len(manifest.DownstreamPatches))
+	if len(manifest.DownstreamPatches) != 6 {
+		t.Fatalf("manifest downstream_patches = %d; want six reviewed squash-compatible contributions", len(manifest.DownstreamPatches))
 	}
 	downstream := manifest.DownstreamPatches[0]
 	downstreamWants := []struct{ name, got, want string }{
@@ -312,6 +312,29 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 			wantDispatchDispositionFiles,
 		)
 	}
+	hvacErratum := manifest.DownstreamPatches[5]
+	hvacErratumWants := []struct{ name, got, want string }{
+		{"hvac-erratum.base_commit_sha", hvacErratum.BaseCommit, "bc1fa29868017b3c8c6b032655eb3682cf763cfa"},
+		{"hvac-erratum.issue", hvacErratum.Issue, "https://github.com/Project-Helianthus/helianthus-spine-go/issues/15"},
+		{"hvac-erratum.pull_request", hvacErratum.PullRequest, "https://github.com/Project-Helianthus/helianthus-spine-go/pull/16"},
+	}
+	for _, check := range hvacErratumWants {
+		if check.got != check.want {
+			t.Errorf("manifest %s = %q; want %q", check.name, check.got, check.want)
+		}
+	}
+	wantHvacErratumFiles := []string{
+		"contracttests/dependency_closure_test.go",
+		"model/hvac.go",
+		"model/hvac_additions_test.go",
+		"model/issue15_hvac_model_erratum_red_test.go",
+		"model/setpoint.go",
+		"spine/function_data_factory.go",
+		"spine/function_data_factory_test.go",
+	}
+	if !reflect.DeepEqual(hvacErratum.Files, wantHvacErratumFiles) {
+		t.Errorf("manifest HVAC erratum files = %v; want %v", hvacErratum.Files, wantHvacErratumFiles)
+	}
 	for name, record := range map[string]struct {
 		content string
 		patch   string
@@ -321,6 +344,7 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 		"correlated-round-trip": {content: correlatedRoundTrip.ContentSHA256, patch: correlatedRoundTrip.PatchSHA256},
 		"unknown-fields":        {content: unknownFields.ContentSHA256, patch: unknownFields.PatchSHA256},
 		"dispatch-disposition":  {content: dispatchDisposition.ContentSHA256, patch: dispatchDisposition.PatchSHA256},
+		"hvac-erratum":          {content: hvacErratum.ContentSHA256, patch: hvacErratum.PatchSHA256},
 	} {
 		for kind, digest := range map[string]string{"content": record.content, "patch": record.patch} {
 			if !regexp.MustCompile(`^[0-9a-f]{64}$`).MatchString(digest) {
