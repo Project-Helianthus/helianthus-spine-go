@@ -127,6 +127,17 @@
       "issue": "https://github.com/Project-Helianthus/helianthus-spine-go/issues/15",
       "patch_sha256": "c75ec5ec91c029c134a21f61d49b28ed4b31e4877cd91d372a572b4080b93f53",
       "pull_request": "https://github.com/Project-Helianthus/helianthus-spine-go/pull/16"
+    },
+    {
+      "base_commit_sha": "5db11e32ca673fad3fc0d8f8a318615e96e0873d",
+      "content_sha256": "fcf3f5e24facebdb0f0338bfd4ce7d1069135585ee184d537a6ff6315f998c71",
+      "files": [
+        "contracttests/dependency_closure_test.go",
+        "contracttests/lint_baseline_test.go"
+      ],
+      "issue": "https://github.com/Project-Helianthus/helianthus-spine-go/issues/17",
+      "patch_sha256": "5e8b1f0ac1ccbb8c173792ba46e7f0f03cbdc8bfd12eced24cd741821b0e617c",
+      "pull_request": "https://github.com/Project-Helianthus/helianthus-spine-go/pull/18"
     }
   ],
   "reviewed_patches": [
