@@ -483,19 +483,6 @@ func readFile(t *testing.T, path string) []byte {
 	return data
 }
 
-func trackedGoFiles(t *testing.T, root string) []string {
-	t.Helper()
-	cmd := exec.Command("git", "ls-files", "-z", "--", "*.go")
-	cmd.Dir = root
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("list tracked Go files: %v", err)
-	}
-	paths := strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00")
-	sort.Strings(paths)
-	return paths
-}
-
 func trackedGoSourceFiles(t *testing.T, root string) []string {
 	t.Helper()
 	cmd := exec.Command("git", "ls-files", "-z")
