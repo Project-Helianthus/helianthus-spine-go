@@ -6,7 +6,7 @@
     "go.sum"
   ],
   "fork": {
-    "intended_prerelease": "v0.7.1-helianthus.4",
+    "intended_prerelease": "v0.7.1-helianthus.9",
     "lifecycle": "temporary_downstream_patch_carrier",
     "origin": "https://github.com/Project-Helianthus/helianthus-spine-go.git"
   },

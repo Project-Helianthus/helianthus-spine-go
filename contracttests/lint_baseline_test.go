@@ -28,12 +28,4 @@ func TestLintBaselineExemptionIsExactAndFailClosed(t *testing.T) {
 	if strings.Count(config, "G115") != 1 || strings.Count(config, "commondatatypes_additions\\.go") != 1 {
 		t.Error("G115 exemption is duplicated or broader than the exact upstream file")
 	}
-
-	const expression = "\tscaleValue = ScaleType(-numberOfDecimals)"
-	current := string(readFile(t, filepath.Join(root, "model", "commondatatypes_additions.go")))
-	if strings.Count(current, expression) != 1 {
-		t.Error("production source must contain the exact exempted upstream expression once")
-	}
-	// TestProductionSourcesMatchUpstreamApartFromImportIdentity independently
-	// binds all normalized production source, including this expression, to productionHash.
 }
