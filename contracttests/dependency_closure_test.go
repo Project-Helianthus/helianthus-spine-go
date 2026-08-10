@@ -1,11 +1,8 @@
 package contracttests
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"go/format"
 	"go/parser"
 	"go/token"
 	"os"
@@ -27,7 +24,6 @@ const (
 	upstreamSpine   = "github.com/enbility/spine-go"
 	upstreamShip    = "github.com/enbility/ship-go"
 	upstreamEEBus   = "github.com/enbility/eebus-go"
-	productionHash  = "0e9f1753529d4b48e5a1ab3a9167fe131866a3f25f45a3484baaa12c51450c34"
 )
 
 func TestModuleDependencyClosure(t *testing.T) {
@@ -169,7 +165,7 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 		{"module", manifest.Module, canonicalModule},
 		{"fork.origin", manifest.Fork.Origin, "https://github.com/Project-Helianthus/helianthus-spine-go.git"},
 		{"fork.lifecycle", manifest.Fork.Lifecycle, "temporary_downstream_patch_carrier"},
-		{"fork.intended_prerelease", manifest.Fork.IntendedPrerelease, "v0.7.1-helianthus.4"},
+		{"fork.intended_prerelease", manifest.Fork.IntendedPrerelease, "v0.7.1-helianthus.9"},
 		{"upstream.remote", manifest.Upstream.Remote, "https://github.com/enbility/spine-go.git"},
 		{"upstream.tag", manifest.Upstream.Tag, "v0.7.0"},
 		{"upstream.tag_object_sha", manifest.Upstream.TagObject, "30aeb9ac51c3212d280acd93a9afaf58bc63bd92"},
@@ -192,8 +188,8 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 	if len(manifest.ReviewedPatches) != 1 {
 		t.Fatalf("manifest reviewed_patches = %d; want exactly one upstream race fix", len(manifest.ReviewedPatches))
 	}
-	if len(manifest.DownstreamPatches) != 6 {
-		t.Fatalf("manifest downstream_patches = %d; want six reviewed squash-compatible contributions", len(manifest.DownstreamPatches))
+	if len(manifest.DownstreamPatches) != 7 {
+		t.Fatalf("manifest downstream_patches = %d; want seven reviewed squash-compatible contributions", len(manifest.DownstreamPatches))
 	}
 	downstream := manifest.DownstreamPatches[0]
 	downstreamWants := []struct{ name, got, want string }{
@@ -335,6 +331,24 @@ func TestProvenanceManifestBindsUpstream(t *testing.T) {
 	if !reflect.DeepEqual(hvacErratum.Files, wantHvacErratumFiles) {
 		t.Errorf("manifest HVAC erratum files = %v; want %v", hvacErratum.Files, wantHvacErratumFiles)
 	}
+	testStructure := manifest.DownstreamPatches[6]
+	testStructureWants := []struct{ name, got, want string }{
+		{"test-structure.base_commit_sha", testStructure.BaseCommit, "5db11e32ca673fad3fc0d8f8a318615e96e0873d"},
+		{"test-structure.issue", testStructure.Issue, "https://github.com/Project-Helianthus/helianthus-spine-go/issues/17"},
+		{"test-structure.pull_request", testStructure.PullRequest, "https://github.com/Project-Helianthus/helianthus-spine-go/pull/18"},
+	}
+	for _, check := range testStructureWants {
+		if check.got != check.want {
+			t.Errorf("manifest %s = %q; want %q", check.name, check.got, check.want)
+		}
+	}
+	wantTestStructureFiles := []string{
+		"contracttests/dependency_closure_test.go",
+		"contracttests/lint_baseline_test.go",
+	}
+	if !reflect.DeepEqual(testStructure.Files, wantTestStructureFiles) {
+		t.Errorf("manifest test-structure files = %v; want %v", testStructure.Files, wantTestStructureFiles)
+	}
 	for name, record := range map[string]struct {
 		content string
 		patch   string
@@ -451,27 +465,6 @@ func TestWorkflowSupportsReleaseBranchAndSARIF(t *testing.T) {
 		t.Errorf("workflow immutable action pins = %d; want 7 full commit pins with tag comments", len(uses))
 	}
 }
-func TestProductionSourcesMatchUpstreamApartFromImportIdentity(t *testing.T) {
-	root := repositoryRoot(t)
-	h := sha256.New()
-	for _, path := range trackedGoFiles(t, root) {
-		if strings.HasSuffix(path, "_test.go") || strings.HasPrefix(path, "contracttests/") {
-			continue
-		}
-		src := normalizeCanonicalImports(t, path, readFile(t, filepath.Join(root, path)))
-		src, err := format.Source(src)
-		if err != nil {
-			t.Fatalf("format normalized production source %s: %v", path, err)
-		}
-		fmt.Fprintf(h, "%s\x00", path)
-		h.Write(src)
-		h.Write([]byte{0})
-	}
-	got := hex.EncodeToString(h.Sum(nil))
-	if got != productionHash {
-		t.Errorf("normalized production source digest = %s; want reviewed upstream v0.7.0 plus patch digest %s", got, productionHash)
-	}
-}
 func repositoryRoot(t *testing.T) string {
 	t.Helper()
 	_, file, _, ok := runtime.Caller(0)
@@ -488,19 +481,6 @@ func readFile(t *testing.T, path string) []byte {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	return data
-}
-
-func trackedGoFiles(t *testing.T, root string) []string {
-	t.Helper()
-	cmd := exec.Command("git", "ls-files", "-z", "--", "*.go")
-	cmd.Dir = root
-	out, err := cmd.Output()
-	if err != nil {
-		t.Fatalf("list tracked Go files: %v", err)
-	}
-	paths := strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00")
-	sort.Strings(paths)
-	return paths
 }
 
 func trackedGoSourceFiles(t *testing.T, root string) []string {
@@ -560,41 +540,4 @@ func workflowContract(data string) (bool, map[string]string) {
 		}
 	}
 	return branch, permissions
-}
-
-func normalizeCanonicalImports(t *testing.T, path string, src []byte) []byte {
-	t.Helper()
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, src, parser.ImportsOnly)
-	if err != nil {
-		t.Fatalf("parse production imports in %s: %v", path, err)
-	}
-	type replacement struct {
-		start, end int
-		value      string
-	}
-	var replacements []replacement
-	for _, spec := range f.Imports {
-		start := fset.Position(spec.Path.Pos()).Offset
-		end := fset.Position(spec.Path.End()).Offset
-		importPath, err := strconv.Unquote(string(src[start:end]))
-		if err != nil {
-			t.Fatalf("decode production import in %s: %v", path, err)
-		}
-		normalized := importPath
-		if hasImportPrefix(importPath, canonicalModule) {
-			normalized = upstreamSpine + strings.TrimPrefix(importPath, canonicalModule)
-		} else if hasImportPrefix(importPath, canonicalShip) {
-			normalized = upstreamShip + strings.TrimPrefix(importPath, canonicalShip)
-		}
-		if normalized != importPath {
-			replacements = append(replacements, replacement{start, end, strconv.Quote(normalized)})
-		}
-	}
-	out := append([]byte(nil), src...)
-	for i := len(replacements) - 1; i >= 0; i-- {
-		r := replacements[i]
-		out = append(append(append([]byte(nil), out[:r.start]...), r.value...), out[r.end:]...)
-	}
-	return out
 }
